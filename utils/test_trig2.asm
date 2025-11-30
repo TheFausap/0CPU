@@ -27,12 +27,20 @@ instr STORE_R1 333
 instr LOAD_R3 333
 instr WRITE_TAPE
 
-; atan2(y, x) via PB
+; atan2(0.5, 0.5) -> PI/4
 instr CALL LIBNAME atan2 PB @350
 instr STORE_R1 334
 instr LOAD_R3 334
 instr WRITE_TAPE
 
-HALT
-.start 310
+; atan(1.0) -> PI/4
+instr LOAD_R1 302
+instr CALL LIBNAME atan
+instr STORE_R1 335
+instr LOAD_R3 335
+instr WRITE_TAPE
 
+HALT
+.org 302
+q47 1.0
+.start 310

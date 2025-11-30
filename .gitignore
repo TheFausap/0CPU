@@ -2,3 +2,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache
+*.tape
+*.list
+*.lst
+*.jsonl
+*.txt

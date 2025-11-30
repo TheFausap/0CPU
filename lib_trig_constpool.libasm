@@ -48,6 +48,10 @@ PI:
 q47 3.141592653589793          ; PI (now representable in Q3.45)
 MPI:
 q47 -3.141592653589793         ; -PI
+TAN_PI_8:
+q47  0.4142135623730950        ; tan(pi/8)
+PI_4:
+q47  0.7853981633974483        ; pi/4
 
 
 ; ---- Library-local workspace addresses (absolute in library) ----
@@ -236,10 +240,85 @@ instr RET
 
 ; Save x (r1) and compute x^2
 instr STORE_R1 2000              ; Y = x (reuse Y for "x" here)
-instr LOAD_R2 2000               ; r2 = x
-instr LOAD_R3 2000               ; r3 = x
+; ---- Range Reduction ----
+; Check if |x| > TAN_PI_8 (0.414...)
+; x is in 2000.
+; 1. Get abs(x)
+instr LOAD_R1 2000               ; x
+instr LOAD_R2 @SIGN
+instr AND
+instr STORE_R1 2005              ; U = sign bit of x (reuse U/2005)
+instr LOAD_R1 2000               ; x
+instr SKIP_IF_ZERO               ; if x=0, no reduction
+instr JUMP ATAN_CHECK_REDUCE
+instr JUMP ATAN_DO_SERIES        ; x=0 -> series(0)=0
+
+ATAN_CHECK_REDUCE:
+; Compute |x|
+instr LOAD_R1 2005               ; sign bit
+instr SKIP_IF_ZERO               ; if positive, skip negate
+instr JUMP ATAN_NEGATE_X
+instr LOAD_R1 2000               ; x
+instr JUMP ATAN_STORE_ABS
+
+ATAN_NEGATE_X:
+instr LOAD_R1 2000               ; x
+instr NEG
+
+ATAN_STORE_ABS:
+instr STORE_R1 2004              ; TMP = |x|
+
+; Check if |x| > TAN_PI_8
+; Compute |x| - TAN_PI_8
+instr LOAD_R1 @TAN_PI_8
+instr NEG
+instr STORE_R1 2006              ; TMP = -TAN_PI_8 (use RES/2006)
+instr LOAD_R2 2004               ; |x|
+instr ADD                       ; |x| - 0.414
+instr LOAD_R2 @SIGN
+instr AND
+instr SKIP_IF_ZERO              ; if result >= 0 (so |x| >= 0.414), skip next
+instr JUMP ATAN_DO_SERIES       ; Else (negative) -> No reduction
+instr JUMP ATAN_DO_REDUCE       ; Positive -> Reduce
+
+ATAN_DO_REDUCE:
+; x' = (|x| - 1) / (|x| + 1)
+; bias = PI_4
+instr LOAD_R1 @PI_4
+instr STORE_R1 2006              ; RES = bias
+
+instr LOAD_R1 2004              ; |x|
+instr LOAD_R2 @ONE
+instr NEG
+instr ADD                       ; |x| - 1
+instr STORE_R1 2001              ; X2 = numerator (reuse X2)
+
+instr LOAD_R1 2004              ; |x|
+instr LOAD_R2 @ONE
+instr ADD                       ; |x| + 1
+instr STORE_R1 2004              ; TMP = denominator
+
+instr LOAD_R1 2001              ; numerator
+instr LOAD_R2 2004              ; denominator
+instr DIV
+instr STORE_R1 2000              ; x = x' (update x for series)
+instr JUMP ATAN_DO_SERIES_BIASED
+
+ATAN_DO_SERIES:
+; bias = 0
+instr CLEAR_R1
+instr STORE_R1 2006              ; RES = 0
+
+ATAN_DO_SERIES_BIASED:
+; x is in 2000 (original or reduced).
+; RES (2006) holds bias.
+; Proceed with series.
+
+; x^2
+instr LOAD_R1 2000               ; x
+instr LOAD_R2 2000               ; x
 instr MUL
-instr ROUND                     ; r1 = x^2
+instr ROUND
 instr STORE_R1 2001              ; X2 = x^2
 
 ; t = A11
@@ -295,8 +374,27 @@ instr STORE_R1 2002
 instr LOAD_R2 2000               ; x
 instr LOAD_R3 2002               ; u
 instr MUL
-instr ROUND
+instr ROUND                     ; r1 = series_result
 
+; Add bias
+instr LOAD_R2 2006               ; bias
+instr ADD                       ; r1 = series_result + bias
+
+; Apply original sign of x (stored in 2005)
+instr STORE_R1 2006              ; Store absolute result
+
+instr LOAD_R1 2005               ; sign bit
+instr SKIP_IF_ZERO               ; if positive, done
+instr JUMP ATAN_NEGATE_RESULT
+instr JUMP ATAN_RET
+
+ATAN_NEGATE_RESULT:
+instr LOAD_R1 2006
+instr NEG
+instr STORE_R1 2006
+
+ATAN_RET:
+instr LOAD_R1 2006
 instr RET
 .endl
 
@@ -335,6 +433,93 @@ instr LOAD_R3 2002               ; r
 instr MUL
 instr ROUND
 instr STORE_R1 2003              ; R2 = r^2
+
+; ---- Range Reduction ----
+; Check if |r| > TAN_PI_8 (0.414...)
+; We work with absolute value of r for the check, but transformation depends on sign?
+; Identity: atan(x) = sign(x) * atan(|x|)
+; Transformation: atan(|x|) = pi/4 + atan( (|x|-1)/(|x|+1) )
+; So we can reduce |r| and then apply sign(r) to the result.
+
+; 1. Get abs(r)
+instr LOAD_R1 2002               ; r
+instr LOAD_R2 @SIGN
+instr AND
+instr STORE_R1 2005              ; U = sign bit of r
+instr LOAD_R1 2002               ; r
+instr SKIP_IF_ZERO               ; if r=0, no reduction needed
+instr JUMP ATAN2_CHECK_REDUCE
+instr JUMP ATAN2_DO_SERIES       ; r=0 -> series(0)=0
+
+ATAN2_CHECK_REDUCE:
+; Compute |r|
+instr LOAD_R1 2005               ; sign bit
+instr SKIP_IF_ZERO               ; if positive (sign=0), skip negate logic
+instr JUMP ATAN2_NEGATE_R
+instr LOAD_R1 2002               ; r (positive)
+instr JUMP ATAN2_STORE_ABS
+
+ATAN2_NEGATE_R:
+instr LOAD_R1 2002               ; r
+instr NEG
+
+ATAN2_STORE_ABS:
+instr STORE_R1 2004              ; TMP = |r|
+
+; Check if |r| > TAN_PI_8
+; Compute |r| - TAN_PI_8
+instr LOAD_R1 @TAN_PI_8
+instr NEG
+instr STORE_R1 2006              ; TMP = -TAN_PI_8 (use RES/2006, preserve U/2005)
+instr LOAD_R2 2004               ; |r|
+instr ADD                       ; -TAN_PI_8 + |r| = |r| - 0.414
+instr LOAD_R2 @SIGN
+instr AND
+instr SKIP_IF_ZERO              ; if result >= 0 (so |r| >= 0.414), skip next
+instr JUMP ATAN2_DO_SERIES      ; Else (negative) -> No reduction
+instr JUMP ATAN2_DO_REDUCE      ; Positive -> Reduce
+
+ATAN2_DO_REDUCE:
+; r' = (|r| - 1) / (|r| + 1)
+; bias = PI_4
+instr LOAD_R1 @PI_4
+instr STORE_R1 2006              ; RES = bias (reuse RES temporarily)
+
+instr LOAD_R1 2004              ; |r|
+instr LOAD_R2 @ONE
+instr NEG
+instr ADD                       ; |r| - 1
+instr STORE_R1 2001              ; X2 = numerator (reuse X2)
+
+instr LOAD_R1 2004              ; |r|
+instr LOAD_R2 @ONE
+instr ADD                       ; |r| + 1
+instr STORE_R1 2004              ; TMP = denominator
+
+instr LOAD_R1 2001              ; numerator
+instr LOAD_R2 2004              ; denominator
+instr DIV
+instr STORE_R1 2004              ; TMP = r' (reduced argument)
+
+; Update r and r^2 for series
+instr LOAD_R1 2004              ; r'
+instr STORE_R1 2002              ; R = r' (store back to R for series)
+instr LOAD_R2 2004
+instr LOAD_R3 2004
+instr MUL
+instr ROUND
+instr STORE_R1 2003              ; R2 = (r')^2
+instr JUMP ATAN2_DO_SERIES_BIASED
+
+ATAN2_DO_SERIES:
+; bias = 0
+instr CLEAR_R1
+instr STORE_R1 2006              ; RES = 0
+
+ATAN2_DO_SERIES_BIASED:
+; Now R (2002) is the argument (either r or r'), R2 (2003) is argument^2.
+; RES (2006) holds the bias (0 or PI_4).
+; We proceed with Horner series on R.
 
 ; t = A11
 instr LOAD_R1 @A11
@@ -386,11 +571,37 @@ instr ADD
 instr STORE_R1 2004              ; u
 
 ; a = r * u
-instr LOAD_R2 2002               ; r
+instr LOAD_R2 2002               ; r (or r')
 instr LOAD_R3 2004               ; u
 instr MUL
-instr ROUND                     ; r1 = a
-instr STORE_R1 2006              ; RES = a
+instr ROUND                     ; r1 = series_result
+
+; Add bias (stored in RES)
+instr LOAD_R2 2006               ; bias (0 or PI_4)
+instr ADD                       ; r1 = series_result + bias
+
+; Apply original sign of r (stored in 2005)
+; If original r was negative, result should be negative.
+; But wait, we reduced |r|.
+; atan(r) = sign(r) * atan(|r|)
+; We computed atan(|r|) = bias + series(r').
+; So we need to negate if original r was negative.
+instr STORE_R1 2006              ; Store absolute result temporarily
+
+instr LOAD_R1 2005               ; sign bit of original r
+instr SKIP_IF_ZERO               ; if positive, done
+instr JUMP ATAN2_NEGATE_RESULT
+instr JUMP ATAN2_STORE_FINAL
+
+ATAN2_NEGATE_RESULT:
+instr LOAD_R1 2006
+instr NEG
+instr STORE_R1 2006
+instr JUMP ATAN2_STORE_FINAL
+
+ATAN2_STORE_FINAL:
+; Result is in RES (2006).
+; Proceed to quadrant check.
 
 ; Quadrant adjust when x < 0:
 instr LOAD_R1 2001               ; r1 = x
