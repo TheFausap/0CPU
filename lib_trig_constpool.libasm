@@ -52,6 +52,10 @@ TAN_PI_8:
 q47  0.4142135623730950        ; tan(pi/8)
 PI_4:
 q47  0.7853981633974483        ; pi/4
+HALF:
+q47  0.5                       ; 0.5
+ONE_HALF:
+q47  1.5                       ; 1.5
 
 
 ; ---- Library-local workspace addresses (absolute in library) ----
@@ -671,4 +675,257 @@ instr LOAD_R2 1
 instr SHIFT_RIGHT               ; -PI/2
 instr RET
 
+.endl
+
+
+; -----------------------------------------------------------------------------
+; inv_sqrt(x): returns 1/sqrt(x) (Q3.45)
+; x > 0.0625 (approx) to avoid overflow > 4.0
+; -----------------------------------------------------------------------------
+.libfn inv_sqrt 0x06
+.args 1
+.returns r1
+.clobbers r1,r2,r3
+
+; Store x
+instr STORE_R1 2000              ; x
+
+; Initial guess y = 1.0
+instr LOAD_R1 @ONE
+instr STORE_R1 2001              ; y
+
+; Unrolled loop (5 iterations)
+; Iteration 1
+instr LOAD_R2 2001               ; y
+instr LOAD_R3 2001               ; y
+instr MUL
+instr ROUND                     ; y^2
+instr STORE_R1 2002              ; TMP = y^2
+instr LOAD_R2 2000               ; x
+instr LOAD_R3 2002               ; y^2
+instr MUL
+instr ROUND                     ; x * y^2
+instr STORE_R1 2002              ; TMP
+instr LOAD_R2 @HALF
+instr LOAD_R3 2002
+instr MUL
+instr ROUND                     ; 0.5 * x * y^2
+instr STORE_R1 2002              ; TMP
+instr LOAD_R1 2002               ; term
+instr NEG                       ; -term
+instr LOAD_R2 @ONE_HALF
+instr ADD                       ; 1.5 - term
+instr STORE_R1 2002              ; factor
+instr LOAD_R2 2001               ; y
+instr LOAD_R3 2002               ; factor
+instr MUL
+instr ROUND                     ; y_new
+instr STORE_R1 2001              ; update y
+
+; Iteration 2
+instr LOAD_R2 2001
+instr LOAD_R3 2001
+instr MUL
+instr ROUND
+instr STORE_R1 2002
+instr LOAD_R2 2000
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2002
+instr LOAD_R2 @HALF
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2002
+instr LOAD_R1 2002
+instr NEG
+instr LOAD_R2 @ONE_HALF
+instr ADD
+instr STORE_R1 2002
+instr LOAD_R2 2001
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2001
+
+; Iteration 3
+instr LOAD_R2 2001
+instr LOAD_R3 2001
+instr MUL
+instr ROUND
+instr STORE_R1 2002
+instr LOAD_R2 2000
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2002
+instr LOAD_R2 @HALF
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2002
+instr LOAD_R1 2002
+instr NEG
+instr LOAD_R2 @ONE_HALF
+instr ADD
+instr STORE_R1 2002
+instr LOAD_R2 2001
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2001
+
+; Iteration 4
+instr LOAD_R2 2001
+instr LOAD_R3 2001
+instr MUL
+instr ROUND
+instr STORE_R1 2002
+instr LOAD_R2 2000
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2002
+instr LOAD_R2 @HALF
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2002
+instr LOAD_R1 2002
+instr NEG
+instr LOAD_R2 @ONE_HALF
+instr ADD
+instr STORE_R1 2002
+instr LOAD_R2 2001
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2001
+
+; Iteration 5
+instr LOAD_R2 2001
+instr LOAD_R3 2001
+instr MUL
+instr ROUND
+instr STORE_R1 2002
+instr LOAD_R2 2000
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2002
+instr LOAD_R2 @HALF
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2002
+instr LOAD_R1 2002
+instr NEG
+instr LOAD_R2 @ONE_HALF
+instr ADD
+instr STORE_R1 2002
+instr LOAD_R2 2001
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2001
+
+instr LOAD_R1 2001               ; return y
+instr RET
+.endl
+
+
+; -----------------------------------------------------------------------------
+; sqrt(x): returns sqrt(x) (Q3.45)
+; -----------------------------------------------------------------------------
+.libfn sqrt 0x07
+.args 1
+.returns r1
+.clobbers r1,r2,r3
+
+; Store x
+instr STORE_R1 2000              ; x
+
+; Initial guess y = 1.0
+instr LOAD_R1 @ONE
+instr STORE_R1 2001              ; y
+
+; Unrolled loop (5 iterations)
+; Iteration 1
+instr LOAD_R1 2000               ; x
+instr LOAD_R2 2001               ; y
+instr DIV                       ; x/y
+instr STORE_R1 2002              ; TMP = x/y
+instr LOAD_R1 2001               ; y
+instr LOAD_R2 2002               ; x/y
+instr ADD
+instr STORE_R1 2002              ; sum
+instr LOAD_R2 @HALF
+instr LOAD_R3 2002               ; sum
+instr MUL
+instr ROUND                     ; y_new
+instr STORE_R1 2001              ; update y
+
+; Iteration 2
+instr LOAD_R1 2000
+instr LOAD_R2 2001
+instr DIV
+instr STORE_R1 2002
+instr LOAD_R1 2001
+instr LOAD_R2 2002
+instr ADD
+instr STORE_R1 2002
+instr LOAD_R2 @HALF
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2001
+
+; Iteration 3
+instr LOAD_R1 2000
+instr LOAD_R2 2001
+instr DIV
+instr STORE_R1 2002
+instr LOAD_R1 2001
+instr LOAD_R2 2002
+instr ADD
+instr STORE_R1 2002
+instr LOAD_R2 @HALF
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2001
+
+; Iteration 4
+instr LOAD_R1 2000
+instr LOAD_R2 2001
+instr DIV
+instr STORE_R1 2002
+instr LOAD_R1 2001
+instr LOAD_R2 2002
+instr ADD
+instr STORE_R1 2002
+instr LOAD_R2 @HALF
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2001
+
+; Iteration 5
+instr LOAD_R1 2000
+instr LOAD_R2 2001
+instr DIV
+instr STORE_R1 2002
+instr LOAD_R1 2001
+instr LOAD_R2 2002
+instr ADD
+instr STORE_R1 2002
+instr LOAD_R2 @HALF
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2001
+
+instr LOAD_R1 2001               ; return y
+instr RET
 .endl
