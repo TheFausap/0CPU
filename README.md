@@ -1,5 +1,5 @@
 
-# 48-bit Tape CPU Simulator (Q47) — Project README
+# 48-bit Tape CPU Simulator (Q47) — Project
 
 This repository contains a 48‑bit, fixed‑point (Q47) **tape CPU simulator** with:
 
@@ -149,9 +149,6 @@ Library sources are assembled by **LibraryBuilder** to `library.tape`, which con
 - `.endl` — end function
 
 > **Note**: Within **library function bodies**, **do not** use `CALL LIBNAME`/`PB` syntax (these are **program‑assembler features**). If you need `atan(y/x)` inside a function, implement it directly with the Horner series (as in the trig functions).
-
-**Magic alignment**:
-- `LIB_MAGIC` must be **`0x4C49424844`** in both `cpu_sim/core/cpu.py` and `cpu_sim/tools/lib_builder.py`.
 
 ---
 
@@ -364,13 +361,8 @@ If import issues occur, ensure you run from the project root (`OCPU/`), and the 
 
 ## Troubleshooting
 
-- **Invalid library magic header**: Ensure `LIB_MAGIC` is **`0x4C49424844`** in both CPU and builder; rebuild the library.
-- **Wrong trig outputs**:
-  - Verify function bodies perform full Horner pipeline: compute `t`, then `u = 1 + t*x^2`, then final `x*u`, storing/loading from TMP where needed.
-  - Ensure ALU `OR` uses bitwise `|` in `cpu.py` (not line continuation `\`).
 - **CALL LIBNAME fails**: Program assembler only. Library function bodies must not use `CALL LIBNAME`/`PB`.
 - **Card boot**: Only single‑word ops allowed. Do not place CALL with extra immediates on cards.
-- **EOF behavior**: `read_bits()` should return **`None`** when out‑of‑range; the CPU relies on this to detect missing immediates.
 - **Import errors**: Run `pytest` from project root; consider `pip install -e .` for a unified package import.
 
 ---
@@ -382,9 +374,5 @@ If import issues occur, ensure you run from the project root (`OCPU/`), and the 
 - Trace rotation & limits (`--trace-max-lines`), richer anomaly rules.
 - CI workflow (GitHub Actions): lint, tests, artifact upload of traces on failure.
 
----
 
-## License
-
-Add your preferred license (MIT/Apache‑2.0) here.
 
