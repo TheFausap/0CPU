@@ -1,7 +1,7 @@
 
-# 48-bit Tape CPU Simulator (Q47) — Project
+# 48-bit Tape CPU Simulator (Q3.45) — Project
 
-This repository contains a 48‑bit, fixed‑point (Q47) **tape CPU simulator** with:
+This repository contains a 48‑bit, fixed‑point (Q3.45) **tape CPU simulator** with:
 
 - A core CPU that executes 48‑bit encoded instructions over **scratchpad** and **library** tapes.
 - An instruction set for ALU, control‑flow, I/O, and device realism operations.
@@ -11,7 +11,7 @@ This repository contains a 48‑bit, fixed‑point (Q47) **tape CPU simulator** 
 - A **CLI/monitor** to build, assemble, run, and observe programs.
 - **Observability** (per‑instruction JSONL tracing + metrics) and a small analysis script.
 
-> **Numeric model**: All registers are signed **Q47** fixed point (48‑bit two’s‑complement with 47 fractional bits), representing real values in **[−1.0, 1.0)**.
+> **Numeric model**: All registers are signed **Q3.45** fixed point (48‑bit two’s‑complement with 45 fractional bits), representing real values in **[−4.0, 4.0)**.
 
 ---
 
@@ -25,7 +25,7 @@ This repository contains a 48‑bit, fixed‑point (Q47) **tape CPU simulator** 
 - [Device realism](#device-realism)
 - [Observability & tracing](#observability--tracing)
 - [Instruction set overview](#instruction-set-overview)
-- [Fixed‑point details (Q47)](#fixed-point-details-q47)
+- [Fixed‑point details (Q3.45)](#fixed-point-details-q345)
 - [PB (parameter block) calling convention](#pb-parameter-block-calling-convention)
 - [Tests](#tests)
 - [Troubleshooting](#troubleshooting)
@@ -289,6 +289,7 @@ python cli.py monitor --scratch scratchpad.tape --library library.tape --trace-f
 
 **Control & flow**
 - `SKIP`, `SKIP_IF_ZERO`, `SKIP_IF_NONZERO`
+- `JUMP` (unconditional absolute jump)
 - `TXR` (transfer/execute scratchpad block)
 - `CALL` (modes: SCRATCH_ABS, LIB_ABS, LIB_IDX, LIB_NAME; optional `PB`)
 - `RET`
@@ -313,16 +314,17 @@ python cli.py monitor --scratch scratchpad.tape --library library.tape --trace-f
 
 ---
 
-## Fixed‑point details (Q47)
+## Fixed‑point details (Q3.45)
 
-- Registers hold signed Q47 integers (48‑bit two’s‑complement; 47 fractional bits).
-- Range: **[−2^47, 2^47−1]** → scaled to **[−1.0, 1.0)** in real values.
-- `MUL`: produces Q94 across r1:r2; `ROUND` collapses to Q47.
+- Registers hold signed Q3.45 integers (48‑bit two’s‑complement; 45 fractional bits).
+- Range: **[−2^47, 2^47−1]** → scaled to **[−4.0, 4.0)** in real values.
+- `MUL`: produces Q6.90 across r1:r2; `ROUND` collapses to Q3.45.
 - `DIV`: `r1 ← (r1 << FRAC_BITS) // r2`, clamped; divide‑by‑zero → saturate to ±MAX.
-- Rounding policy: **nearest, away from zero** (adds/subtracts **0.5** in Q47 before downshift).
+- Rounding policy: **nearest, away from zero** (adds/subtracts **0.5** in Q3.45 before downshift).
 
 **Implications**:
-- Angles ≥ 1 rad saturate; quadrant adjustments in `atan2` use ±1.0 as a saturated proxy for ±π (given the Q47 range).
+- Angles up to $\pm 4.0$ rad can be represented, allowing full support for $\pi$ and $-\pi$.
+- `atan2` and other trig functions now return correct values in radians without saturation.
 
 ---
 
