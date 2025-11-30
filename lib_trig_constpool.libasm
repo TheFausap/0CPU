@@ -1,0 +1,394 @@
+.libhdr
+
+; ---- Constant Pool (labels at CONST_BASE) ----
+.constbase 1000
+ONE:
+q47  1.0
+C3:
+q47 -0.16666666666666666       ; -1/6
+C5:
+q47  0.008333333333333333      ;  1/120
+C7:
+q47 -0.0001984126984126984     ; -1/5040
+
+D2:
+q47 -0.5                       ; -1/2
+D4:
+q47  0.041666666666666664      ;  1/24
+D6:
+q47 -0.001388888888888889      ; -1/720
+
+
+; ---- Additional constants for tan / atan ----
+D3:
+q47  0.3333333333333333        ; +1/3
+D5_TAN:
+q47  0.13333333333333333       ; +2/15
+D7_TAN:
+q47  0.05396825396825397       ; +17/315
+
+A3:
+q47 -0.3333333333333333        ; -1/3
+A5:
+q47  0.2                       ; +1/5
+A7:
+q47 -0.14285714285714285       ; -1/7
+
+
+; ---- Utility constants for sign testing & saturated adjustments ----
+SIGN:
+bits 0x800000000000            ; top bit mask (sign bit in 48-bit two's complement)
+MONE:
+q47  -1.0                      ; saturated -1.0 for π/2, π quadrant adjustments
+
+
+; ---- Library-local workspace addresses (absolute in library) ----
+; X  = 104
+; X2 = 105
+; TMP= 106
+
+; -----------------------------------------------------------------------------
+; sin(x) via Horner:
+;   sin(x) ≈ x * (1 + x^2 * (C3 + x^2 * (C5 + x^2 * C7)))
+; Args: r1=x (Q47)  Returns: r1  Clobbers: r1,r2,r3
+; -----------------------------------------------------------------------------
+.libfn sin 0x01
+.args 1
+.returns r1
+.clobbers r1,r2,r3
+
+; Save x in library workspace (NOT scratchpad)
+instr STORE_R1 104              ; LIB[104] = x
+
+; Compute x^2 into LIB[105]
+instr LOAD_R2 104               ; r2 = LIB[104] = x
+instr LOAD_R3 104               ; r3 = x
+instr MUL                       ; r2 * r3 -> r1:r2 (Q94)
+instr ROUND                     ; r1 = x^2 (Q47)
+instr STORE_R1 105              ; LIB[105] = x^2
+
+; t = C7
+instr LOAD_R1 @C7               ; r1 = C7
+instr STORE_R1 106              ; LIB[106] = t
+
+; t = C5 + t * x^2
+instr LOAD_R2 105               ; r2 = x^2 (from LIB)
+instr LOAD_R3 106               ; r3 = t (from LIB)
+instr MUL
+instr ROUND                     ; r1 = t * x^2
+instr LOAD_R2 @C5               ; r2 = C5
+instr ADD                       ; r1 = C5 + t*x^2
+instr STORE_R1 106              ; LIB[106] = t
+
+; t = C3 + t * x^2
+instr LOAD_R2 105               ; r2 = x^2
+instr LOAD_R3 106               ; r3 = t
+instr MUL
+instr ROUND                     ; r1 = t * x^2
+instr LOAD_R2 @C3               ; r2 = C3
+instr ADD                       ; r1 = C3 + t*x^2
+instr STORE_R1 106              ; LIB[106] = t
+
+; u = 1 + t * x^2
+instr LOAD_R2 105               ; r2 = x^2
+instr LOAD_R3 106               ; r3 = t
+instr MUL
+instr ROUND                     ; r1 = t * x^2
+instr LOAD_R2 @ONE              ; r2 = 1.0
+instr ADD                       ; r1 = 1 + t*x^2
+instr STORE_R1 106              ; LIB[106] = u
+
+; result = x * u
+instr LOAD_R2 104               ; r2 = x
+instr LOAD_R3 106               ; r3 = u
+instr MUL
+instr ROUND                     ; r1 = x * u
+
+instr RET
+.endl
+
+
+; -----------------------------------------------------------------------------
+; cos(x) via Horner:
+;   cos(x) ≈ 1 + x^2 * (D2 + x^2 * (D4 + x^2 * D6))
+; Args: r1=x (Q47)  Returns: r1  Clobbers: r1,r2,r3
+; -----------------------------------------------------------------------------
+.libfn cos 0x02
+.args 1
+.returns r1
+.clobbers r1,r2,r3
+
+; Save x in library workspace
+instr STORE_R1 104              ; LIB[104] = x
+
+; Compute x^2 into LIB[105]
+instr LOAD_R2 104               ; r2 = x
+instr LOAD_R3 104               ; r3 = x
+instr MUL
+instr ROUND                     ; r1 = x^2
+instr STORE_R1 105              ; LIB[105] = x^2
+
+; t = D6
+instr LOAD_R1 @D6
+instr STORE_R1 106              ; t = D6
+
+; t = D4 + t * x^2
+instr LOAD_R2 105               ; x^2
+instr LOAD_R3 106               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @D4
+instr ADD
+instr STORE_R1 106              ; t
+
+; t = D2 + t * x^2
+instr LOAD_R2 105               ; x^2
+instr LOAD_R3 106               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @D2
+instr ADD
+instr STORE_R1 106              ; t
+
+; result = 1 + t * x^2
+instr LOAD_R2 105               ; x^2
+instr LOAD_R3 106               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @ONE
+instr ADD                       ; r1 = 1 + t*x^2
+
+instr RET
+.endl
+
+
+
+.libfn tan 0x03
+.args 1
+.returns r1
+.clobbers r1,r2,r3
+
+instr STORE_R1 104              ; x
+instr LOAD_R2 104
+instr LOAD_R3 104
+instr MUL
+instr ROUND
+instr STORE_R1 105              ; x^2
+
+instr LOAD_R1 @D7_TAN
+instr STORE_R1 106
+
+instr LOAD_R2 105
+instr LOAD_R3 106
+instr MUL
+instr ROUND
+instr LOAD_R2 @D5_TAN
+instr ADD
+instr STORE_R1 106
+
+instr LOAD_R2 105
+instr LOAD_R3 106
+instr MUL
+instr ROUND
+instr LOAD_R2 @D3
+instr ADD
+instr STORE_R1 106
+
+instr LOAD_R2 105
+instr LOAD_R3 106
+instr MUL
+instr ROUND
+instr LOAD_R2 @ONE
+instr ADD                       ; u
+instr STORE_R1 106
+
+instr LOAD_R2 104               ; x
+instr LOAD_R3 106               ; u
+instr MUL
+instr ROUND
+
+instr RET
+.endl
+
+
+
+
+; -----------------------------------------------------------------------------
+; atan(x) via Horner:
+;   atan(x) ≈ x * (1 + x^2 * (A3 + x^2 * (A5 + x^2 * A7)))
+; -----------------------------------------------------------------------------
+.libfn atan 0x04
+.args 1
+.returns r1
+.clobbers r1,r2,r3
+
+; Save x (r1) and compute x^2
+instr STORE_R1 104              ; Y = x (reuse Y for "x" here)
+instr LOAD_R2 104               ; r2 = x
+instr LOAD_R3 104               ; r3 = x
+instr MUL
+instr ROUND                     ; r1 = x^2
+instr STORE_R1 105              ; X2 = x^2
+
+; t = A7
+instr LOAD_R1 @A7
+instr STORE_R1 106              ; TMP = t
+
+; t = A5 + t * x^2
+instr LOAD_R2 105               ; x^2
+instr LOAD_R3 106               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @A5
+instr ADD
+instr STORE_R1 106              ; TMP = t
+
+; t = A3 + t * x^2
+instr LOAD_R2 105               ; x^2
+instr LOAD_R3 106               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @A3
+instr ADD
+instr STORE_R1 106              ; TMP = t
+
+; u = 1 + t * x^2
+instr LOAD_R2 105               ; x^2
+instr LOAD_R3 106               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @ONE
+instr ADD                       ; r1 = u
+instr STORE_R1 106
+
+; result = x * u
+instr LOAD_R2 104               ; x
+instr LOAD_R3 106               ; u
+instr MUL
+instr ROUND
+
+instr RET
+.endl
+
+
+
+; -----------------------------------------------------------------------------
+; atan2(y, x): returns angle in radians (Q47), saturated for |angle| ≥ 1
+; PB: PB[1]=y -> r1, PB[2]=x -> r2
+; -----------------------------------------------------------------------------
+.libfn atan2 0x05
+.args 2
+.returns r1
+.clobbers r1,r2,r3
+
+; Pre-store y and x to workspace for later sign/quadrant checks
+instr STORE_R1 104              ; Y = y (from PB in r1)
+instr CLEAR_R1
+instr ADD                       ; r1 := r1 + r2  (copy x from r2 into r1)
+instr STORE_R1 105              ; X = x
+
+; ---- Special case: x == 0 ----
+instr LOAD_R1 105               ; r1 = x
+instr SKIP_IF_NONZERO           ; if x != 0 skip next
+instr SKIP                      ; else -> handle x==0
+
+; x == 0:
+instr LOAD_R1 104               ; r1 = y
+instr SKIP_IF_ZERO              ; if y == 0 -> next (return 0)
+instr SKIP                      ; else -> ±1.0
+
+; y == 0 -> 0
+instr CLEAR_R1
+instr RET
+
+; y != 0: sign(y) -> ±1.0 (≈ ±π/2 saturated)
+instr LOAD_R2 @SIGN
+instr AND                       ; r1 = SIGN if y<0 else 0
+instr SKIP_IF_ZERO              ; if non-negative -> +1.0
+instr SKIP                      ; else -> -1.0
+
+instr LOAD_R1 @ONE              ; +1.0
+instr RET
+
+instr LOAD_R1 @MONE             ; -1.0
+instr RET
+
+; ---- Normal path: x != 0 ----
+; r = y / x
+instr LOAD_R1 104               ; y
+instr LOAD_R2 105               ; x
+instr DIV                       ; r1 = y/x
+instr STORE_R1 106              ; R = r
+
+; r^2
+instr LOAD_R2 106               ; r
+instr LOAD_R3 106               ; r
+instr MUL
+instr ROUND
+instr STORE_R1 107              ; R2 = r^2
+
+; t = A7
+instr LOAD_R1 @A7
+instr STORE_R1 108              ; TMP = t
+
+; t = A5 + t * r^2
+instr LOAD_R2 107               ; r^2
+instr LOAD_R3 108               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @A5
+instr ADD
+instr STORE_R1 108              ; t
+
+; t = A3 + t * r^2
+instr LOAD_R2 107               ; r^2
+instr LOAD_R3 108               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @A3
+instr ADD
+instr STORE_R1 108              ; t
+
+; u = 1 + t * r^2
+instr LOAD_R2 107               ; r^2
+instr LOAD_R3 108               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @ONE
+instr ADD
+instr STORE_R1 108              ; u
+
+; a = r * u
+instr LOAD_R2 106               ; r
+instr LOAD_R3 108               ; u
+instr MUL
+instr ROUND                     ; r1 = a
+
+; Quadrant adjust when x < 0:
+instr LOAD_R1 105               ; r1 = x
+instr LOAD_R2 @SIGN
+instr AND                       ; r1 = SIGN if x<0 else 0
+instr SKIP_IF_ZERO              ; x >= 0 -> RET
+instr SKIP                      ; else -> y sign decides ±1.0
+
+; x >= 0
+instr RET
+
+; x < 0: check y sign
+instr LOAD_R1 104               ; r1 = y
+instr LOAD_R2 @SIGN
+instr AND                       ; r1 = SIGN if y<0 else 0
+instr SKIP_IF_ZERO              ; y >= 0 -> add +1.0
+instr SKIP                      ; else -> add -1.0
+
+instr LOAD_R2 @ONE              ; add +1.0 (≈ +π saturated)
+instr ADD
+instr RET
+
+instr LOAD_R2 @MONE             ; add -1.0 (≈ -π saturated)
+instr ADD
+instr RET
+
+.endl
+
+

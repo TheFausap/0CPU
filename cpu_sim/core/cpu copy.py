@@ -1,0 +1,477 @@
+# cpu.py: complete CPU with boot, ALU, multi-device CALL/RET, TXR, I/O realism ops
+from typing import List, Optional, Tuple
+
+from .tape import CardReader, PaperTape
+from .encoding import (
+    to_twos_complement,
+    from_twos_complement,
+    from_tc36,
+    WORD_MASK,
+    FRAC_BITS,
+)
+from .opcodes import (
+    decode_op,
+    OP,
+    CALL_FLAG_PB,
+    CALL_MODE_SCRATCH_ABS,
+    CALL_MODE_LIB_ABS,
+    CALL_MODE_LIB_IDX,
+    CALL_MODE_LIB_NAME,
+)
+
+LIB_MAGIC = 0x4C49424844  # 'LIBHD' truncated to 48-bit
+
+
+class CPU:
+    """
+    48-bit word CPU (Q47 fixed-point) with three registers r1, r2, r3.
+    Executes tape-resident programs on scratchpad and library tapes.
+    Supports:
+      - Booting from cards (odd -> r1, even -> execute)
+      - TXR: transfer/execute block from scratchpad
+      - CALL/RET: multi-device (scratchpad/library) with LIBNAME + PB
+      - ALU ops (ADD, NEG, MUL, DIV, ROUND, logic, pair-shifts)
+      - I/O ops (READ_CARD, WRITE_TAPE)
+      - I/O-realism ops (REWIND, FF, STATUS)
+    """
+
+    def __init__(
+        self,
+        scratchpad,
+        library,
+        card_reader: CardReader,
+        paper_tape: PaperTape,
+    ):
+        # Registers (signed Q47 integers)
+        self.r1: int = 0
+        self.r2: int = 0
+        self.r3: int = 0
+
+        # Devices: TapeFile or TapeDevice (must implement read_bits/write_bits/read_word/write_word)
+        self.scratchpad = scratchpad
+        self.library = library
+        self.card_reader = card_reader
+        self.paper_tape = paper_tape
+
+        # Multi-device CALL stack: entries are (device_obj, return_ip)
+        self._ctx_stack: List[Tuple] = []
+        self._current_dev = None
+
+        # Reserved scratchpad shadow window for PB extras (beyond r1..r3)
+        self.PB_SHADOW_BASE = 0x100000
+
+    # -----------------------------------------------------------------------
+    # Library helpers
+    # -----------------------------------------------------------------------
+    def _lib_header(self) -> Tuple[int, int, int]:
+        """Return (version, entry_count, toc_start) from library header words."""
+        version = self.library.read_bits(1)
+        entry_count = self.library.read_bits(2)
+        toc_start = self.library.read_bits(3)
+        return version, entry_count, toc_start
+
+    def _lib_toc_entry(self, toc_start: int, idx: int) -> Tuple[int, int, int, int]:
+        """
+        Read a 4-word TOC entry:
+          [0] fn_id
+          [1] namehash
+          [2] start (absolute index of function header start)
+          [3] length (words in function including header)
+        """
+        base = toc_start + idx * 4
+        fn_id = self.library.read_bits(base + 0)
+        namehash = self.library.read_bits(base + 1)
+        start = self.library.read_bits(base + 2)
+        length = self.library.read_bits(base + 3)
+        return fn_id, namehash, start, length
+
+    
+    def _lib_resolve_idx(self, val: int) -> int:
+        """
+        Resolve a library call by either zero-based TOC index (preferred),
+        or, if 'val' isn't a valid index, by matching function ID in TOC.
+        Returns the first instruction word address (skip 3-word header).
+        """
+        _, entry_count, toc_start = self._lib_header()
+
+        # First: treat 'val' as zero-based TOC index
+        if 0 <= val < entry_count:
+            _, _, start, _ = self._lib_toc_entry(toc_start, val)
+            return start + 3
+
+        # Fallback: treat 'val' as a function ID (48-bit stored in TOC)
+        for i in range(entry_count):
+            fn_id, _, start, _ = self._lib_toc_entry(toc_start, i)
+            if fn_id == (val & WORD_MASK):
+                return start + 3
+
+        raise IndexError(f"Library index/ID not found: {val}")
+
+    def _lib_resolve_name(self, namehash: int) -> int:
+        """Resolve a 48-bit namehash to the function start (skip 3-word header)."""
+        _, entry_count, toc_start = self._lib_header()
+        for i in range(entry_count):
+            _, nh, start, _ = self._lib_toc_entry(toc_start, i)
+            if nh == (namehash & WORD_MASK):
+                return start + 3
+        raise KeyError("Library function namehash not found")
+
+    # -----------------------------------------------------------------------
+    # Execution loop on the active device
+    # -----------------------------------------------------------------------
+    def _execute_block(self, dev, start_ip: int):
+        """
+        Execute starting at (dev, start_ip) until HALT or RET (empty stack), or end-of-tape.
+        This function SWITCHES the active device and keeps it updated when CALL/RET occur.
+        """
+        self._current_dev = dev
+        ip = start_ip
+
+        while True:
+            # Stop if we reached end-of-tape (prevents infinite scanning of zero words)
+            if hasattr(self._current_dev, "record_count"):
+                if ip >= self._current_dev.record_count():
+                    break
+
+            bits48 = self._current_dev.read_bits(ip)
+            next_ip = self.execute_encoded(self._current_dev, bits48, tape_ip=ip)
+
+            if next_ip is None:
+                # HALT or RET with empty stack
+                break
+
+            # Device may change inside execute_encoded (CALL/RET); always advance using next_ip
+            ip = next_ip
+
+    # -----------------------------------------------------------------------
+    # ALU helpers
+    # -----------------------------------------------------------------------
+    @staticmethod
+    def _clamp_q47(x: int) -> int:
+        """Clamp to signed Q47 range [-2^47, 2^47 - 1]."""
+        MIN = -(1 << 47)
+        MAX = (1 << 47) - 1
+        return MIN if x < MIN else MAX if x > MAX else x
+
+    @staticmethod
+    def _mul_q47_pair(a: int, b: int) -> Tuple[int, int]:
+        """
+        Multiply two Q47 integers -> signed 96-bit Q94 across (high48, low48).
+        Returns signed 48-bit components.
+        """
+        prod = a * b  # Q47 * Q47 -> Q94
+        MIN96 = -(1 << 95)
+        MAX96 = (1 << 95) - 1
+        prod = MIN96 if prod < MIN96 else MAX96 if prod > MAX96 else prod
+
+        if prod < 0:
+            prod_bits = ((-prod) ^ ((1 << 96) - 1)) + 1
+        else:
+            prod_bits = prod
+        prod_bits &= (1 << 96) - 1
+
+        high_bits = (prod_bits >> 48) & WORD_MASK
+        low_bits = prod_bits & WORD_MASK
+        return from_twos_complement(high_bits), from_twos_complement(low_bits)
+
+    @staticmethod
+    def _round_q94_to_q47(high48: int, low48: int) -> int:
+        """
+        Round a Q94 value (stored in r1:r2) to a single Q47 (nearest).
+        """
+        hb = to_twos_complement(high48)
+        lb = to_twos_complement(low48)
+        combined_bits = ((hb << 48) | lb) & ((1 << 96) - 1)
+
+        # Signed decode 96-bit two's complement
+        if combined_bits & (1 << 95):
+            val_q94 = -(((~combined_bits) & ((1 << 96) - 1)) + 1)
+        else:
+            val_q94 = combined_bits
+
+        half = 1 << (FRAC_BITS - 1)  # 0.5 in Q47
+        val_q94 = val_q94 + half if val_q94 >= 0 else val_q94 - half
+
+        # Shift down to Q47 and clamp
+        MIN = -(1 << 47)
+        MAX = (1 << 47) - 1
+        out = val_q94 >> FRAC_BITS
+        return MIN if out < MIN else MAX if out > MAX else out
+
+    def _shift_pair_96(self, left: bool, count_signed_36bits: int):
+        """Logical shift across r1:r2 treated as 96-bit quantity."""
+        # Negative counts treated as 0
+        count = max(0, min(95, int(count_signed_36bits)))
+        hb = to_twos_complement(self.r1)
+        lb = to_twos_complement(self.r2)
+        combined = ((hb << 48) | lb) & ((1 << 96) - 1)
+        if left:
+            combined = (combined << count) & ((1 << 96) - 1)
+        else:
+            combined = combined >> count
+        new_high = (combined >> 48) & WORD_MASK
+        new_low = combined & WORD_MASK
+        self.r1 = from_twos_complement(new_high)
+        self.r2 = from_twos_complement(new_low)
+
+    # -----------------------------------------------------------------------
+    # Execute a single encoded instruction on 'dev'
+    # -----------------------------------------------------------------------
+    def execute_encoded(self, dev, bits48: int, tape_ip: Optional[int] = None) -> Optional[int]:
+        op, opr_bits = decode_op(bits48)
+
+        def next_ip(ip, consumed_extra=0):
+            return None if ip is None else ip + 1 + consumed_extra
+
+        # ---- NOP (safe advance) ----
+        if op == OP.get("NOP", 0x000):
+            return next_ip(tape_ip)
+
+        # ---- Memory & I/O ----
+        if op == OP["STORE_R1"]:
+            dev.write_bits(opr_bits, to_twos_complement(self.r1))
+            return next_ip(tape_ip)
+
+        elif op == OP["STORE_R3"]:
+            dev.write_bits(opr_bits, to_twos_complement(self.r3))
+            return next_ip(tape_ip)
+
+        elif op == OP["LOAD_R1"]:
+            self.r1 = dev.read_word(opr_bits)
+            return next_ip(tape_ip)
+
+        elif op == OP["LOAD_R2"]:
+            self.r2 = dev.read_word(opr_bits)
+            return next_ip(tape_ip)
+
+        elif op == OP["LOAD_R3"]:
+            self.r3 = dev.read_word(opr_bits)
+            return next_ip(tape_ip)
+
+        elif op == OP["CLEAR_R1"]:
+            self.r1 = 0
+            return next_ip(tape_ip)
+
+        elif op == OP["CLEAR_R2"]:
+            self.r2 = 0
+            return next_ip(tape_ip)
+
+        elif op == OP["CLEAR_R3"]:
+            self.r3 = 0
+            return next_ip(tape_ip)
+
+        elif op == OP["WRITE_TAPE"]:
+            self.paper_tape.write(self.r3)
+            return next_ip(tape_ip)
+
+        elif op == OP["READ_CARD"]:
+            v = self.card_reader.read_next()
+            if v is not None:
+                self.r3 = v
+            return next_ip(tape_ip)
+
+        # ---- ALU ----
+        elif op == OP["ADD"]:
+            self.r1 = self._clamp_q47(self.r1 + self.r2)
+            return next_ip(tape_ip)
+
+        elif op == OP["NEG"]:
+            self.r1 = self._clamp_q47(-self.r1)
+            return next_ip(tape_ip)
+
+        elif op == OP["MUL"]:
+            # r2 * r3 -> r1:r2 (Q94 across the pair)
+            hi, lo = self._mul_q47_pair(self.r2, self.r3)
+            self.r1, self.r2 = hi, lo
+            return next_ip(tape_ip)
+
+        elif op == OP["DIV"]:
+            # r1 / r2 -> r1 (scale numerator by Q47 before integer division)
+            if self.r2 == 0:
+                self.r1 = (1 << 47) - 1 if self.r1 >= 0 else -(1 << 47)
+            else:
+                self.r1 = self._clamp_q47((self.r1 << FRAC_BITS) // self.r2)
+            return next_ip(tape_ip)
+
+        elif op == OP["ROUND"]:
+            self.r1 = self._round_q94_to_q47(self.r1, self.r2)
+            self.r2 = 0
+            return next_ip(tape_ip)
+
+        elif op == OP["AND"]:
+            self.r1 = from_twos_complement(
+                to_twos_complement(self.r1) & to_twos_complement(self.r2)
+            )
+            return next_ip(tape_ip)
+
+        elif op == OP["OR"]:
+            self.r1 = from_twos_complement(
+                to_twos_complement(self.r1) | to_twos_complement(self.r2)
+            )
+            return next_ip(tape_ip)
+
+        elif op == OP["XOR"]:
+            self.r1 = from_twos_complement(
+                to_twos_complement(self.r1) ^ to_twos_complement(self.r2)
+            )
+            return next_ip(tape_ip)
+
+        elif op == OP["SHIFT_LEFT"]:
+            self._shift_pair_96(left=True, count_signed_36bits=from_tc36(opr_bits))
+            return next_ip(tape_ip)
+
+        elif op == OP["SHIFT_RIGHT"]:
+            self._shift_pair_96(left=False, count_signed_36bits=from_tc36(opr_bits))
+            return next_ip(tape_ip)
+
+        # ---- Control flow (scratchpad) ----
+        elif op == OP["SKIP"]:
+            return None if tape_ip is None else tape_ip + 2
+
+        elif op == OP["SKIP_IF_ZERO"]:
+            return (None if tape_ip is None else tape_ip + 2) if self.r1 == 0 else next_ip(tape_ip)
+
+        elif op == OP["SKIP_IF_NONZERO"]:
+            return (None if tape_ip is None else tape_ip + 2) if self.r1 != 0 else next_ip(tape_ip)
+
+        elif op == OP["TXR"]:
+            # Transfer & execute block on scratchpad
+            self._execute_block(self.scratchpad, opr_bits)
+            return next_ip(tape_ip)
+
+        
+        elif op == OP["SLOAD_R1"]:
+            # Always load from scratchpad, even when executing on library tape
+            self.r1 = self.scratchpad.read_word(opr_bits)
+            return next_ip(tape_ip)
+
+        elif op == OP["SLOAD_R2"]:
+            self.r2 = self.scratchpad.read_word(opr_bits)
+            return next_ip(tape_ip)
+
+        elif op == OP["SLOAD_R3"]:
+            self.r3 = self.scratchpad.read_word(opr_bits)
+            return next_ip(tape_ip)
+
+        elif op == OP["HALT"]:
+            return None
+
+        # ---- CALL / RET (multi-device, LIBNAME & PB support) ----
+        elif op == OP["CALL"]:
+            mode = (opr_bits >> 32) & 0xF
+            flags = (opr_bits >> 28) & 0xF
+            value = opr_bits & ((1 << 28) - 1)
+            consumed = 0
+
+            # Extra immediate for LIBNAME
+            namehash = None
+            if mode == CALL_MODE_LIB_NAME:
+                namehash = dev.read_bits(tape_ip + 1)
+                consumed += 1
+
+            # Extra immediate for PB
+            pb_addr = None
+            if flags & CALL_FLAG_PB:
+                pb_addr = dev.read_bits(tape_ip + 1 + consumed)
+                consumed += 1
+
+            # PB mapping (PB[0]=count, PB[1..] args)
+            if pb_addr is not None:
+                count = self.scratchpad.read_word(pb_addr)
+                if count >= 1:
+                    self.r1 = self.scratchpad.read_word(pb_addr + 1)
+                if count >= 2:
+                    self.r2 = self.scratchpad.read_word(pb_addr + 2)
+                if count >= 3:
+                    self.r3 = self.scratchpad.read_word(pb_addr + 3)
+                # copy extras into shadow window
+                extra = max(0, count - 3)
+                for i in range(extra):
+                    val = self.scratchpad.read_word(pb_addr + 4 + i)
+                    self.scratchpad.write_word(self.PB_SHADOW_BASE + i, val)
+
+            # Resolve target address/device
+            if mode == CALL_MODE_SCRATCH_ABS:
+                target_dev, target_ip = self.scratchpad, value
+            elif mode == CALL_MODE_LIB_ABS:
+                target_dev, target_ip = self.library, value
+            elif mode == CALL_MODE_LIB_IDX:
+                target_dev, target_ip = self.library, self._lib_resolve_idx(value)
+            elif mode == CALL_MODE_LIB_NAME:
+                target_dev, target_ip = self.library, self._lib_resolve_name(namehash)
+            else:
+                raise ValueError("Unknown CALL mode")
+
+            # Push return context and jump to target: SWITCH device here
+            self._ctx_stack.append((dev, tape_ip + 1 + consumed))
+            self._current_dev = target_dev
+            return target_ip
+
+        elif op == OP["RET"]:
+            if self._ctx_stack:
+                dev_ret, ip_ret = self._ctx_stack.pop()
+                # SWITCH device back to caller
+                self._current_dev = dev_ret
+                return ip_ret
+            else:
+                return None
+
+        # ---- I/O realism ops ----
+        elif op == OP.get("REWIND"):
+            dev_code = opr_bits  # 0=scratchpad, 1=library, 2=cards
+            if dev_code == 0 and hasattr(self.scratchpad, "rewind"):
+                self.scratchpad.rewind()
+            elif dev_code == 1 and hasattr(self.library, "rewind"):
+                self.library.rewind()
+            elif dev_code == 2 and hasattr(self.card_reader, "tape") and hasattr(self.card_reader.tape, "rewind"):
+                self.card_reader.tape.rewind()
+            return next_ip(tape_ip)
+
+        elif op == OP.get("FF"):
+            # dev in top 12 bits, count in low 24 bits
+            dev_code = (opr_bits >> 24) & 0xFFF
+            count = opr_bits & ((1 << 24) - 1)
+            target_ff = None
+            if dev_code == 0 and hasattr(self.scratchpad, "fast_forward"):
+                target_ff = self.scratchpad.fast_forward
+            elif dev_code == 1 and hasattr(self.library, "fast_forward"):
+                target_ff = self.library.fast_forward
+            elif dev_code == 2 and hasattr(self.card_reader, "tape") and hasattr(self.card_reader.tape, "fast_forward"):
+                target_ff = self.card_reader.tape.fast_forward
+            if target_ff:
+                target_ff(count)
+            return next_ip(tape_ip)
+
+        elif op == OP.get("STATUS"):
+            dev_code = opr_bits
+            pos = 0
+            if dev_code == 0 and hasattr(self.scratchpad, "get_position"):
+                pos = self.scratchpad.get_position()
+            elif dev_code == 1 and hasattr(self.library, "get_position"):
+                pos = self.library.get_position()
+            elif dev_code == 2 and hasattr(self.card_reader, "tape") and hasattr(self.card_reader.tape, "get_position"):
+                pos = self.card_reader.tape.get_position()
+            self.r3 = pos
+            return next_ip(tape_ip)
+
+        # ---- Unknown opcode -> safe advance ----
+        return next_ip(tape_ip)
+
+    # -----------------------------------------------------------------------
+    # Boot from cards (odd -> r1, even -> execute on scratchpad)
+    # -----------------------------------------------------------------------
+    def boot_from_cards(self):
+        idx = 1
+        while True:
+            val = self.card_reader.read_next()
+            if val is None:
+                break
+            if idx % 2 == 1:
+                # odd card: load r1 directly (signed int from tape)
+                self.r1 = val
+            else:
+                # even card: execute encoded instruction (use raw bits)
+                bits = to_twos_complement(val)
+                self.execute_encoded(self.scratchpad, bits, tape_ip=None)
+            idx += 1
+
