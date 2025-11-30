@@ -5,7 +5,7 @@ WORD_BITS = 48
 BYTE_PER_WORD = 6
 WORD_MASK = (1 << WORD_BITS) - 1
 SIGN_BIT = 1 << (WORD_BITS - 1)
-FRAC_BITS = 47
+FRAC_BITS = 45
 
 MIN_WORD = -(1 << (WORD_BITS - 1))
 MAX_WORD = (1 << (WORD_BITS - 1)) - 1
@@ -44,10 +44,12 @@ def bytes_to_word(b: bytes) -> int:
 
 
 def float_to_q47(x: float) -> int:
-    if x >= 1.0:
-        x = 1.0 - (1.0 / (1 << FRAC_BITS))
-    if x < -1.0:
-        x = -1.0
+    # Q3.45 range is [-4.0, 4.0)
+    limit = 4.0
+    if x >= limit:
+        x = limit - (1.0 / (1 << FRAC_BITS))
+    if x < -limit:
+        x = -limit
     return clamp_word(int(round(x * (1 << FRAC_BITS))))
 
 

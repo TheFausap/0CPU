@@ -222,6 +222,23 @@ class MiniAssembler:
                 self.loc += 1
                 continue
 
+            if toks[0].upper() == "JUMP":
+                if len(toks) < 2:
+                    raise ValueError(f"[line {lineno}] JUMP requires a target label or address")
+                target_tok = toks[1]
+                try:
+                    target = self._parse_int(target_tok)
+                    self._check_36(target, "JUMP target", lineno)
+                    bits = encode_instr("JUMP", target)
+                except ValueError:
+                    # Label reference
+                    bits = encode_instr("JUMP", 0) # Placeholder
+                    self.pending_labels.append((target_tok, self.loc))
+                
+                self._add_item(self.loc, bits, "instr")
+                self.loc += 1
+                continue
+
             raise ValueError(f"[line {lineno}] Unknown line: {line}")
 
     # ---------- pass 2 ----------

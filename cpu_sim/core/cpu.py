@@ -170,7 +170,18 @@ class CPU:
     # -----------------------------------------------------------------------
     @staticmethod
     def _clamp_q47(x: int) -> int:
-        """Clamp to signed Q47 range [-2^47, 2^47 - 1]."""
+        """Clamp to signed Q47 range [-2^47, 2^47 - 1].
+           NOTE: With FRAC_BITS=45, this is actually Q3.45, but we keep the name for now or rename?
+           The method uses hardcoded 47. We should use WORD_BITS-1.
+           Wait, encoding.py defines WORD_BITS=48.
+           The range of a 48-bit signed integer is always [-2^47, 2^47-1].
+           The interpretation of bits changes (Q0.47 vs Q3.45), but the integer range of the container is the same.
+           So _clamp_q47 is actually correct for ANY 48-bit signed integer container.
+           However, let's verify if we need to change anything here.
+           MIN = -(1 << 47) is correct for 48-bit two's complement.
+           So this function is actually fine as "clamp to 48-bit signed integer".
+           I will leave it but maybe add a comment.
+        """
         MIN = -(1 << 47)
         MAX = (1 << 47) - 1
         return MIN if x < MIN else MAX if x > MAX else x
@@ -516,6 +527,14 @@ class CPU:
             self.r3 = self.scratchpad.read_word(addr)
             self._emit_trace(dev, tape_ip, op_name, op, opr_bits, consumed_extra, pb_used, ctx_switch=ctx_switch)
             return next_ip(tape_ip)
+
+        elif op == OP.get("JUMP"):
+            # Absolute jump
+            target = from_tc36(opr_bits)
+            if target < 0:
+                raise ValueError("Negative address for JUMP")
+            self._emit_trace(dev, tape_ip, op_name, op, opr_bits, consumed_extra, pb_used, ctx_switch=ctx_switch)
+            return target
 
         elif op == OP["HALT"]:
             self._emit_trace(dev, tape_ip, op_name, op, opr_bits, consumed_extra, pb_used, ctx_switch=ctx_switch)

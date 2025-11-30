@@ -35,13 +35,20 @@ OP = {
     "REWIND":       0x01C,  # operand: device (0=scratchpad,1=library,2=cards)
     "FF":           0x01D,  # operand: pack(dev,count) -> dev in top 12 bits, count in low 24 bits
     "STATUS":       0x01E,  # operand: device; result -> r3 (position)
+    "JUMP":         0x01F,  # operand: signed 36-bit relative offset (or absolute? usually relative in this CPU for SKIP, but TXR is abs. Let's make JUMP absolute like TXR for simplicity or relative?
+                            # Wait, SKIP is relative (+2). TXR is absolute.
+                            # Standard JUMP usually absolute or relative.
+                            # Let's check assembler. If we want to jump to label, assembler handles it.
+                            # Let's make it ABSOLUTE address for simplicity in this tape architecture.
+                            # Actually, looking at `cpu.py`, TXR takes absolute.
+                            # Let's make JUMP absolute.
 }
 
 # --- Cross-device scratchpad loads (new) ---
 OP.update({
-    "SLOAD_R1":     0x01F,
-    "SLOAD_R2":     0x020,
-    "SLOAD_R3":     0x021,
+    "SLOAD_R1":     0x020,
+    "SLOAD_R2":     0x021,
+    "SLOAD_R3":     0x022,
 })
 
 

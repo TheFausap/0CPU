@@ -28,6 +28,7 @@ class LibFunction:
         self.returns   = 0  # 0=r1, 1=r1:r2
         self.clobbers  = 0  # bit0=r1, bit1=r2, bit2=r3
         self.body: List[int] = []  # encoded instruction bits
+        self.local_labels: dict[str, int] = {} # label -> body index
         self.start     = 0
         self.length    = 0
 
@@ -116,18 +117,25 @@ class LibraryBuilder:
             if not line:
                 continue
 
-            # Global label (outside function): "label:"
+            # Label definition
             if line.endswith(":") and (" " not in line):
                 label = line[:-1].strip()
                 if not label:
                     raise ValueError(f"[line {lineno}] Empty label name")
+                
                 if self.current is not None:
-                    raise ValueError(f"[line {lineno}] Labels inside .libfn are not supported")
-                if self.glob_loc is None:
-                    raise ValueError(f"[line {lineno}] Label '{label}' requires prior .constbase/.org")
-                if label in self.global_labels:
-                    raise ValueError(f"[line {lineno}] Duplicate global label: {label}")
-                self.global_labels[label] = self.glob_loc
+                    # Local label inside function
+                    if label in self.current.local_labels:
+                        raise ValueError(f"[line {lineno}] Duplicate local label: {label}")
+                    # Store relative offset (index in body)
+                    self.current.local_labels[label] = len(self.current.body)
+                else:
+                    # Global label
+                    if self.glob_loc is None:
+                        raise ValueError(f"[line {lineno}] Label '{label}' requires prior .constbase/.org")
+                    if label in self.global_labels:
+                        raise ValueError(f"[line {lineno}] Duplicate global label: {label}")
+                    self.global_labels[label] = self.glob_loc
                 continue
 
             toks = line.split()
@@ -286,10 +294,22 @@ class LibraryBuilder:
 
         # Resolve pending label operands in function bodies
         for (fn_obj, body_idx, mnem, label_name) in self.pending_instr_labels:
-            if label_name not in self.global_labels:
-                raise ValueError(f"Unknown global label referenced by '{mnem}': {label_name}")
-            addr = self.global_labels[label_name]
-            fn_obj.body[body_idx] = encode_instr(mnem, addr) & WORD_MASK
+            # Try local label first
+            if label_name in fn_obj.local_labels:
+                # Calculate absolute address: fn.start + 3 (header) + local_offset
+                # Wait, JUMP target is absolute address.
+                # fn.start is the address of FNHDR_MAGIC.
+                # The body starts at fn.start + 3.
+                # So target = fn.start + 3 + local_offset.
+                local_offset = fn_obj.local_labels[label_name]
+                target_addr = fn_obj.start + 3 + local_offset
+                fn_obj.body[body_idx] = encode_instr(mnem, target_addr) & WORD_MASK
+            elif label_name in self.global_labels:
+                # Global label
+                addr = self.global_labels[label_name]
+                fn_obj.body[body_idx] = encode_instr(mnem, addr) & WORD_MASK
+            else:
+                raise ValueError(f"Unknown label referenced by '{mnem}': {label_name} (in function '{fn_obj.name}')")
 
         # Warn/error on global overlaps
         for (addr, _bits) in self.globals:
