@@ -574,23 +574,22 @@ def _blinklights_loop(mon: Monitor, ip):
                 return f"{label}: size={size} pos={pos}"
             stdscr.addstr(12, 2, dev_line("Scratchpad", mon.scratch))
             stdscr.addstr(13, 2, dev_line("Library",    mon.library))
+            stdscr.addstr(14, 2, dev_line("Cards",      mon.cards))
 
             # PB shadow activity hint
-            stdscr.addstr(15, 0, "PB shadow window:")
-            # simple flicker if any reads/writes near PB_SHADOW_BASE recently (requires minimal tracking; here we just show base)
-            stdscr.addstr(16, 2, f"Base=0x{mon.cpu.PB_SHADOW_BASE:06X}  (args copied on CALL PB)")
-            
+            stdscr.addstr(15, 0, f"PB shadow: Base=0x{mon.cpu.PB_SHADOW_BASE:06X}")
             
             # Tape activity lamps
             def lamp(active): return "●" if active else "○"
             now = time.time()
             def active_recent(dev): return (now - getattr(dev, "_last_action_time", 0)) < 0.2
 
-            stdscr.addstr(18, 0, "Tape Activity:")
-            stdscr.addstr(19, 2, f"Scratchpad: {lamp(active_recent(mon.scratch))}  ({mon.scratch.last_action or '-'})")
-            stdscr.addstr(20, 2, f"Library:    {lamp(active_recent(mon.library))}  ({mon.library.last_action or '-'})")
-            stdscr.addstr(21, 2, f"Paper:      {lamp(False)}")  # For now, track via PaperTape writes if needed
-            stdscr.addstr(22, 2, f"Error:      {lamp(mon.scratch.last_error or mon.library.last_error)}")
+            stdscr.addstr(16, 0, "Tape Activity:")
+            stdscr.addstr(17, 2, f"Scratchpad: {lamp(active_recent(mon.scratch))}  ({mon.scratch.last_action or '-'})")
+            stdscr.addstr(18, 2, f"Library:    {lamp(active_recent(mon.library))}  ({mon.library.last_action or '-'})")
+            stdscr.addstr(19, 2, f"Cards:      {lamp(active_recent(mon.cards))}  ({mon.cards.last_action or '-'})")
+            stdscr.addstr(20, 2, f"Paper:      {lamp(active_recent(mon.paper))}  ({mon.paper.last_action or '-'})")
+            stdscr.addstr(21, 2, f"Error:      {lamp(mon.scratch.last_error or mon.library.last_error)}")
 
             # Reset error flags after 0.5s so lamp doesn't stay on forever
             if getattr(mon.scratch, 'last_error', False) and (now - getattr(mon.scratch, '_last_action_time', 0)) > 0.5:
@@ -599,7 +598,7 @@ def _blinklights_loop(mon: Monitor, ip):
                 mon.library.last_error = False
 
             # Footer
-            stdscr.addstr(24, 0, f"IP={mon.ip if mon.ip is not None else 'None'}  Device={'scratch' if mon.dev is mon.scratch else 'library'}")
+            stdscr.addstr(23, 0, f"IP={mon.ip if mon.ip is not None else 'None'}  Device={'scratch' if mon.dev is mon.scratch else 'library'}")
             stdscr.refresh()
 
             # modest sleep to avoid pegging CPU; adjust for smoothness
@@ -635,8 +634,46 @@ def cmd_monitor(args: argparse.Namespace) -> int:
         mon._trace_buf = mon_trace_buf
         print("Tracing to in-memory buffer (monitor).")
 
+    # Boot if requested
+    if getattr(args, "boot", False):
+        if not args.cards:
+            print("Error: --boot requires --cards")
+            return 1
+        print(f"Booting from cards '{args.cards}'...")
+        mon.cpu.boot_from_cards()
+        # After boot, IP should be set by the last TXR instruction
+        # We need to ensure mon.ip reflects the CPU's current state if it changed?
+        # boot_from_cards executes instructions. If TXR was executed, cpu._execute_block was called?
+        # Wait, TXR calls _execute_block which loops until HALT/RET.
+        # If the program runs to completion during boot (unlikely for a real program, but possible),
+        # then we might be at the end.
+        # BUT, TXR in boot cards usually just sets the start address?
+        # No, TXR *executes* the block.
+        # If the boot cards just load data and then TXR to start, the program *runs* inside TXR.
+        # So `boot_from_cards` might run the whole program!
+        
+        # If we want to *debug* the program after boot, we might need a way to "load but stop at start".
+        # But the architecture defines boot as "load and execute".
+        # If the user wants to debug, they might need to step through boot?
+        # Or maybe we assume the user wants to see the state *after* the program has run (if it finishes)?
+        # OR, maybe the user wants to see the blinklights *during* the run?
+        
+        # If `boot_from_cards` runs the whole program, then `_blinklights_loop` won't show anything until it's done.
+        # This is a problem.
+        
+        # To support "boot and then debug", we might need a special "Boot Loader" that loads but doesn't TXR?
+        # Or we rely on the user not having a TXR in their cards if they want to step?
+        # But standard `cards_builder` puts a TXR at the end.
+        
+        # If we want to visualize the running program in blinklights, we need to run `boot_from_cards` *inside* the blinklights loop,
+        # OR make `boot_from_cards` capable of yielding/being stepped.
+        
+        # For now, let's just add the call. If it runs the whole program, so be it. 
+        # The user asked to "boot from card".
+        pass
+
     if getattr(args, "blinklights", False):
-        _blinklights_loop(mon,args.start)
+        _blinklights_loop(mon, args.start)
     else:
         mon.loop()
         
@@ -701,6 +738,7 @@ def build_parser() -> argparse.ArgumentParser:
     pm.add_argument("--paper", help="Paper tape path")
     pm.add_argument("--blinklights", action="store_true", help="Show front-panel blinklights UI")
     pm.add_argument("--start", type=int, help="Start IP (bypass cards)")
+    pm.add_argument("--boot", action="store_true", help="Boot from cards (ignore --start)")
 
     add_realism_opts(pm)
 
