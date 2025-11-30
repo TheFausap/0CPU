@@ -198,9 +198,16 @@ HALT
 
 Run:
 ```bash
-python cli.py assemble program.asm -o scratchpad.tape
+# 1. Assemble
+python cli.py assemble program.asm -o scratchpad.tape --cards cards.tape
+
+# 2. Run (Direct execution - cheating)
 python cli.py run --scratch scratchpad.tape --library library.tape --start 310 --status
+
+# 3. Run (Realistic - boot from cards)
+python cli.py run --scratch scratchpad.tape --library library.tape --cards cards.tape --boot --status
 ```
+The `--boot` flag tells the simulator to load the program from the card reader and execute the `TXR` instruction to jump to the program's start address.
 
 ---
 
@@ -223,7 +230,6 @@ Realism opcodes in programs:
 ---
 
 ## Observability & tracing
-
 Enable **per‑instruction JSONL trace** and **metrics** from the CLI:
 
 ```bash

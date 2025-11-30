@@ -88,10 +88,9 @@ def cmd_assemble(args: argparse.Namespace) -> int:
         cards_out = Path(args.cards)
         cards = TapeFile(str(cards_out))
         cb = CardsBuilder(cards)
-        # For data items, prepare pair store on boot cards
+        # Prepare pair store on boot cards for all items
         for it in items:
-            if it.kind == "data":
-                cb.append_pair_store(it.bits48, it.addr)
+            cb.append_pair_store(it.bits48, it.addr)
         cb.finalize_boot(start_addr)
         if args.cards_listing:
             Path(args.cards_listing).write_text("\n".join(cb.listing), encoding="utf-8")
@@ -126,8 +125,7 @@ def cmd_buildcards(args: argparse.Namespace) -> int:
     cards = TapeFile(str(cards_out))
     cb = CardsBuilder(cards)
     for it in items:
-        if it.kind == "data":
-            cb.append_pair_store(it.bits48, it.addr)
+        cb.append_pair_store(it.bits48, it.addr)
     cb.finalize_boot(start_addr)
     if listing:
         listing.write_text("\n".join(cb.listing), encoding="utf-8")
@@ -159,10 +157,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     cpu = CPU(scratch_dev, library_dev, CardReader(cards_tape), PaperTape(paper_tape))
 
 
-    # Wire trace sink
+    # Trace configuration
     if args.trace_file:
-        cpu.set_trace_sink(TraceSink(path=str(Path(args.trace_file))))
+        cpu.set_trace_sink(TraceSink(path=args.trace_file))
         print(f"Tracing to '{args.trace_file}'")
+
     # Optional anomaly rules (example)
     try:
         from cpu_sim.tools.anomaly_rules import rule_deep_recursion, rule_high_latency
@@ -171,13 +170,19 @@ def cmd_run(args: argparse.Namespace) -> int:
     except Exception:
         pass
 
-    if args.boot_from_cards:
+    # Execution
+    if args.boot:
+        if not args.cards:
+            print("Error: --boot requires --cards")
+            return 1
+        print(f"Booting from cards '{args.cards}'...")
         cpu.boot_from_cards()
 
     if args.start is not None:
         cpu._execute_block(scratch_dev, args.start)
-    elif not args.boot_from_cards:
-        print("No start address provided and boot_from_cards not set; doing nothing.")
+    elif not args.boot:
+        print("Error: Must specify --start <addr> or --boot")
+        return 1
 
     print(f"REGS r1={cpu.r1:+d} r2={cpu.r2:+d} r3={cpu.r3:+d}")
 
@@ -675,17 +680,17 @@ def build_parser() -> argparse.ArgumentParser:
         prs.add_argument("--error-rate", type=float, default=0.0, help="Error rate [0..1] for TapeDevice")
 
     # run
-    pr = sub.add_parser("run", help="Run program on CPU (direct or via boot cards)")
-    pr.add_argument("--trace-file", help="Write per-instruction JSONL trace to this file")
-    pr.add_argument("--trace-metrics", help="Dump metrics JSON to this file at end")
-    pr.add_argument("--scratch", required=True, help="Scratchpad tape path")
+    pr = sub.add_parser("run", help="Run program on simulator")
+    pr.add_argument("--scratch", default="scratchpad.tape", help="Scratchpad tape path")
     pr.add_argument("--library", help="Library tape path")
     pr.add_argument("--cards", help="Cards tape path")
     pr.add_argument("--paper", help="Paper tape path")
     pr.add_argument("--start", type=int, help="Start IP (bypass cards)")
-    pr.add_argument("--boot-from-cards", action="store_true", help="Boot from cards before running")
+    pr.add_argument("--boot", action="store_true", help="Boot from cards (ignore --start)")
     pr.add_argument("--status", action="store_true", help="Print device info after run")
-    pr.add_argument("--dump-paper", help="Dump paper tape to file")
+    pr.add_argument("--dump-paper", help="Dump paper tape to file after run")
+    pr.add_argument("--trace-file", help="Write JSONL trace to file")
+    pr.add_argument("--trace-metrics", help="Write metrics JSON to file")
     add_realism_opts(pr)
 
     # monitor
