@@ -56,6 +56,14 @@ HALF:
 q47  0.5                       ; 0.5
 ONE_HALF:
 q47  1.5                       ; 1.5
+INV_6:
+q47  0.16666666666666666       ; 1/6
+INV_720:
+q47  0.001388888888888889      ; 1/720
+INT_ONE:
+bits 1                         ; Integer 1 for shifts
+INT_MONE:
+bits 0xFFFFFFFFFFFF            ; Integer -1
 
 
 ; ---- Library-local workspace addresses (absolute in library) ----
@@ -927,5 +935,163 @@ instr ROUND
 instr STORE_R1 2001
 
 instr LOAD_R1 2001               ; return y
+instr RET
+.endl
+
+
+; -----------------------------------------------------------------------------
+; exp(x): returns e^x (Q3.45)
+; Range reduction: x = x / 2^k until |x| < 0.5
+; Taylor series: 1 + x + x^2/2! + ... + x^6/6!
+; Reconstruction: result = result^(2^k)
+; -----------------------------------------------------------------------------
+.libfn exp 0x08
+.args 1
+.returns r1
+.clobbers r1,r2,r3
+
+; Store x
+instr STORE_R1 2000              ; x
+
+; Check sign and make positive
+instr LOAD_R2 @SIGN
+instr AND
+instr STORE_R1 2006              ; initial sign
+instr SKIP_IF_ZERO
+instr JUMP EXP_MAKE_POS
+instr JUMP EXP_INIT_K
+
+EXP_MAKE_POS:
+instr LOAD_R1 2000
+instr NEG
+instr STORE_R1 2000              ; x = |x|
+instr JUMP EXP_INIT_K
+
+EXP_INIT_K:
+; Initialize k = 0
+instr CLEAR_R1
+instr STORE_R1 2005              ; k
+
+; Range reduction loop
+EXP_REDUCE_LOOP:
+; Check if x < 0.5 (x is positive)
+instr LOAD_R1 2000               ; x
+instr LOAD_R2 @D2               ; -0.5
+instr ADD                       ; x - 0.5
+instr LOAD_R2 @SIGN
+instr AND
+instr SKIP_IF_ZERO              ; if result >= 0 (so x >= 0.5), skip to reduce
+instr JUMP EXP_DO_SERIES        ; Else (x < 0.5), proceed to series
+instr JUMP EXP_DO_REDUCE        ; Reduce (x >= 0.5)
+
+EXP_DO_REDUCE:
+; x = x / 2
+instr LOAD_R1 2000
+instr CLEAR_R2
+instr SHIFT_RIGHT 1
+instr STORE_R1 2000              ; x
+; k++
+instr LOAD_R1 2005
+instr LOAD_R2 @INT_ONE
+instr ADD
+instr STORE_R1 2005
+instr JUMP EXP_REDUCE_LOOP
+
+EXP_DO_SERIES:
+; Horner's method for 1 + x + x^2/2! + ... + x^6/6!
+; t = 1/720
+instr LOAD_R1 @INV_720
+instr STORE_R1 2002              ; t
+
+; t = 1/120 + t*x
+instr LOAD_R2 2000               ; x
+instr LOAD_R3 2002               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @C5               ; 1/120
+instr ADD
+instr STORE_R1 2002
+
+; t = 1/24 + t*x
+instr LOAD_R2 2000               ; x
+instr LOAD_R3 2002               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @D4               ; 1/24
+instr ADD
+instr STORE_R1 2002
+
+; t = 1/6 + t*x
+instr LOAD_R2 2000               ; x
+instr LOAD_R3 2002               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @INV_6            ; 1/6
+instr ADD
+instr STORE_R1 2002
+
+; t = 0.5 + t*x
+instr LOAD_R2 2000               ; x
+instr LOAD_R3 2002               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @HALF             ; 0.5
+instr ADD
+instr STORE_R1 2002
+
+; t = 1 + t*x
+instr LOAD_R2 2000               ; x
+instr LOAD_R3 2002               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @ONE
+instr ADD
+instr STORE_R1 2002              ; t
+
+; result = 1 + x*t
+instr LOAD_R2 2000               ; x
+instr LOAD_R3 2002               ; t
+instr MUL
+instr ROUND
+instr LOAD_R2 @ONE
+instr ADD
+instr STORE_R1 2002              ; result
+
+; Reconstruction loop
+EXP_RECONSTRUCT:
+instr LOAD_R1 2005               ; k
+instr SKIP_IF_ZERO
+instr JUMP EXP_SQUARE
+instr JUMP EXP_CHECK_INVERT
+
+EXP_SQUARE:
+; result = result * result
+instr LOAD_R2 2002
+instr LOAD_R3 2002
+instr MUL
+instr ROUND
+instr STORE_R1 2002
+; k--
+instr LOAD_R1 2005
+instr LOAD_R2 @INT_MONE
+instr ADD
+instr STORE_R1 2005
+instr JUMP EXP_RECONSTRUCT
+
+EXP_CHECK_INVERT:
+instr LOAD_R1 2006               ; initial sign
+instr SKIP_IF_ZERO
+instr JUMP EXP_INVERT
+instr JUMP EXP_RET
+
+EXP_INVERT:
+instr LOAD_R2 2002               ; result
+instr LOAD_R1 @ONE
+instr DIV
+instr STORE_R1 2002
+instr JUMP EXP_RET
+
+EXP_RET:
+instr LOAD_R1 2002
 instr RET
 .endl
