@@ -648,6 +648,8 @@ def cmd_monitor(args: argparse.Namespace) -> int:
             return 1
         print(f"Booting from cards '{args.cards}'...")
         mon.cpu.boot_from_cards()
+        # Boot runs the program to completion (via TXR -> _execute_block), so IP is now None (halted).
+        mon.ip = None
         # After boot, IP should be set by the last TXR instruction
         # We need to ensure mon.ip reflects the CPU's current state if it changed?
         # boot_from_cards executes instructions. If TXR was executed, cpu._execute_block was called?
