@@ -3,13 +3,26 @@ import os, time, random
 from ..core.encoding import BYTE_PER_WORD, WORD_MASK, to_twos_complement, from_twos_complement, word_to_bytes, bytes_to_word
 
 class TapeDevice:
-    def __init__(self, path: str, sequential_only: bool = True, ms_per_word: int = 2, start_stop_ms: int = 50, error_rate: float = 0.0, max_retries: int = 3):
+    def __init__(self, path: str, sequential_only: bool = True, ms_per_word: int = 2, start_stop_ms: int = 50, error_rate: float = 0.0, max_retries: int = 3, on_wait=None, ips: float = 0.0, density: int = 200):
         self.path = path
         self.sequential_only = sequential_only
-        self.ms_per_word = ms_per_word
+        
+        # Calculate ms_per_word from IPS/Density if provided
+        if ips > 0:
+            # Density is characters (bytes) per inch.
+            # Word is 6 bytes.
+            words_per_inch = density / 6.0
+            words_per_sec = words_per_inch * ips
+            self.ms_per_word = 1000.0 / words_per_sec
+        else:
+            self.ms_per_word = ms_per_word
+            
         self.start_stop_ms = start_stop_ms
         self.error_rate = error_rate
         self.max_retries = max_retries
+        self.on_wait = on_wait
+        self.ips = ips
+        self.density = density
         self.position = 0
         self.last_action = None
         self.last_error = False
@@ -21,12 +34,16 @@ class TapeDevice:
         self.last_action = action
         self._last_action_time = time.time()
 
-    def _simulate_latency(self, words: int = 1):
+    def _simulate_latency(self, words: int = 1, action_name: str = "moving"):
         # Simulate motor spin-up only if idle for a while
         now = time.time()
         latency = self.ms_per_word * words
         if (now - self._last_action_time) > 0.2: # Motor spins down after 200ms idle
             latency += self.start_stop_ms
+        
+        if latency > 100 and self.on_wait: # Only report significant delays (>100ms)
+            self.on_wait(f"{action_name} ({latency:.0f}ms)")
+            
         time.sleep(latency / 1000.0)
 
     def _inject_error(self) -> bool:
@@ -44,12 +61,12 @@ class TapeDevice:
                 f.write(b'\x00' * (BYTE_PER_WORD * (n_records - current_records)))
 
     def rewind(self):
-        self._simulate_latency(self.position)
+        self._simulate_latency(self.position, "rewinding")
         self.position = 0
 
     def fast_forward(self, n: int):
         n = max(0, int(n))
-        self._simulate_latency(n)
+        self._simulate_latency(n, "seeking")
         self.position += n
 
     def seek(self, index: int):
@@ -63,7 +80,7 @@ class TapeDevice:
         else:
             # random access allowed; simulate latency proportional to distance
             distance = abs(index - self.position)
-            self._simulate_latency(distance)
+            self._simulate_latency(distance, "seeking")
             self.position = index
 
     def read_next(self):

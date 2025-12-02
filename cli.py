@@ -27,16 +27,14 @@ from cpu_sim.core.observe import TraceSink
 # Utilities
 # -----------------------------------------------------------------------------
 
-def _bits_to_lamps(bits: int, width: int = 16) -> str:
-    """Render 'width' lamps from the high bits of a 48-bit word."""
-    # take top 'width' bits of 48-bit word
+def _bits_to_lamps(bits: int, width: int = 48) -> str:
+    """Render 48 lamps for the 48-bit word."""
     mask = (1 << 48) - 1
     b = (bits & mask)
-    # shift to get the high 'width' bits
-    shift = 48 - width
-    slice_bits = (b >> shift) & ((1 << width) - 1)
-    # '●' lit, '○' unlit; fallback to '*' and '.' if your terminal font prefers ASCII
-    return "".join("●" if (slice_bits >> (width - 1 - i)) & 1 else "○" for i in range(width))
+    # Render all 48 bits
+    lamps = "".join("●" if (b >> (47 - i)) & 1 else "○" for i in range(48))
+    # Group by 16 for readability
+    return f"{lamps[:16]} {lamps[16:32]} {lamps[32:]}"
 
 # Reverse opcode map: code -> name
 OP_REV = {v: k for k, v in OP.items()}
@@ -60,9 +58,9 @@ def write_scratchpad(tape: TapeFile, items: List, listing_path: Optional[Path] =
 # Command handlers
 # -----------------------------------------------------------------------------
 
-def _make_device(path: str, realistic: bool, sequential_only: bool, latency: int, start_stop_ms: int, error_rate: float, verbose: bool = False):
+def _make_device(path: str, realistic: bool, sequential_only: bool, latency: int, start_stop_ms: int, error_rate: float, verbose: bool = False, ips: float = 0.0, density: int = 200):
     if realistic:
-        return TapeDevice(path, sequential_only=sequential_only, ms_per_word=latency, start_stop_ms=start_stop_ms, error_rate=error_rate)
+        return TapeDevice(path, sequential_only=sequential_only, ms_per_word=latency, start_stop_ms=start_stop_ms, error_rate=error_rate, ips=ips, density=density)
     else:
         return TapeFile(path, verbose=verbose)
 
@@ -152,8 +150,8 @@ def dump_paper_to_file(paper_tape: TapeFile, path: Path):
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    scratch_dev = _make_device(args.scratch, args.realistic, args.sequential_only, args.latency, args.start_stop_ms, args.error_rate, verbose=args.verbose)
-    library_dev = _make_device(args.library if args.library else "library.tape", args.realistic, args.sequential_only, args.latency, args.start_stop_ms, args.error_rate, verbose=args.verbose)
+    scratch_dev = _make_device(args.scratch, args.realistic, args.sequential_only, args.latency, args.start_stop_ms, args.error_rate, verbose=args.verbose, ips=args.ips, density=args.density)
+    library_dev = _make_device(args.library if args.library else "library.tape", args.realistic, args.sequential_only, args.latency, args.start_stop_ms, args.error_rate, verbose=args.verbose, ips=args.ips, density=args.density)
     cards_tape = TapeFile(str(Path(args.cards)), verbose=args.verbose) if args.cards else TapeFile("cards.tape", verbose=args.verbose)
     paper_tape = TapeFile(str(Path(args.paper)), verbose=args.verbose) if args.paper else TapeFile("paper.tape", verbose=args.verbose)
 
@@ -223,9 +221,9 @@ def cmd_run(args: argparse.Namespace) -> int:
 class Monitor:
     """Interactive monitor: step/run, inspect registers/memory, assemble & load."""
 
-    def __init__(self, scratch_path: Path, library_path: Optional[Path], cards_path: Optional[Path], paper_path: Optional[Path], realistic: bool, sequential_only: bool, latency: int, start_stop_ms: int, error_rate: float, verbose: bool = False):
-        self.scratch = _make_device(str(scratch_path), realistic, sequential_only, latency, start_stop_ms, error_rate, verbose=verbose)
-        self.library = _make_device(str(library_path) if library_path else 'library.tape', realistic, sequential_only, latency, start_stop_ms, error_rate, verbose=verbose)
+    def __init__(self, scratch_path: Path, library_path: Optional[Path], cards_path: Optional[Path], paper_path: Optional[Path], realistic: bool, sequential_only: bool, latency: int, start_stop_ms: int, error_rate: float, verbose: bool = False, ips: float = 0.0, density: int = 200):
+        self.scratch = _make_device(str(scratch_path), realistic, sequential_only, latency, start_stop_ms, error_rate, verbose=verbose, ips=ips, density=density)
+        self.library = _make_device(str(library_path) if library_path else 'library.tape', realistic, sequential_only, latency, start_stop_ms, error_rate, verbose=verbose, ips=ips, density=density)
         self.cards = TapeFile(str(cards_path), verbose=verbose) if cards_path else TapeFile('cards.tape', verbose=verbose)
         self.paper = TapeFile(str(paper_path), verbose=verbose) if paper_path else TapeFile('paper.tape', verbose=verbose)
         self.cpu = CPU(self.scratch, self.library, CardReader(self.cards), PaperTape(self.paper), verbose=verbose)
@@ -524,6 +522,16 @@ def _blinklights_loop(mon: Monitor, ip):
         rate_window = deque(maxlen=50)
         last_t = time.time()
         steps_count = 0
+        
+        # Callback for tape latency
+        def wait_callback(msg):
+            stdscr.addstr(25, 0, f"STATUS: {msg:<40}")
+            stdscr.refresh()
+            
+        # Attach callback to devices if they support it
+        for dev in [mon.scratch, mon.library, mon.cards, mon.paper]:
+            if hasattr(dev, 'on_wait'):
+                dev.on_wait = wait_callback
 
         while True:
             ch = stdscr.getch()
@@ -627,13 +635,17 @@ def _blinklights_loop(mon: Monitor, ip):
 
             # Footer
             stdscr.addstr(23, 0, f"IP={mon.ip if mon.ip is not None else 'None'}  Device={'scratch' if mon.dev is mon.scratch else 'library'}")
+            # Clear status line (it might be overwritten by callback during sleep, but we clear it here for next frame)
+            # Actually, if we clear it here, it will be cleared immediately after sleep returns.
+            # That's fine, we only want to see it WHILE waiting.
+            stdscr.addstr(25, 0, " " * 40) 
             stdscr.refresh()
 
             # modest sleep to avoid pegging CPU; adjust for smoothness
             time.sleep(0.01)
 
             # stop when HALT/RET(empty) hit
-            if mon.ip is None and not paused:
+            if mon.ip is None and not paused and not mon.booting:
                 stdscr.addstr(26, 0, "Program ended (HALT/RET). Press 'q' to exit.")
                 stdscr.refresh()
                 time.sleep(0.2)
@@ -649,7 +661,7 @@ def cmd_monitor(args: argparse.Namespace) -> int:
                   Path(args.cards) if args.cards else None,
                   Path(args.paper) if args.paper else None,
                   realistic=args.realistic, sequential_only=args.sequential_only,
-                  latency=args.latency, start_stop_ms=args.start_stop_ms, error_rate=args.error_rate, verbose=args.verbose)
+                  latency=args.latency, start_stop_ms=args.start_stop_ms, error_rate=args.error_rate, verbose=args.verbose, ips=args.ips, density=args.density)
     
     
     # Trace configuration for monitor
@@ -745,9 +757,11 @@ def build_parser() -> argparse.ArgumentParser:
     def add_realism_opts(prs: argparse.ArgumentParser):
         prs.add_argument("--realistic", action="store_true", help="Wrap scratchpad/library in TapeDevice for realism")
         prs.add_argument("--sequential-only", action="store_true", help="Use sequential-only access for TapeDevice")
-        prs.add_argument("--latency", type=int, default=10, help="Latency ms per word for TapeDevice")
+        prs.add_argument("--latency", type=int, default=2, help="Latency ms per word for TapeDevice")
         prs.add_argument("--start-stop-ms", type=int, default=50, help="Start/stop overhead ms for TapeDevice")
         prs.add_argument("--error-rate", type=float, default=0.0, help="Error rate [0..1] for TapeDevice")
+        prs.add_argument("--ips", type=float, default=0.0, help="Tape speed in Inches Per Second (e.g. 72.0). Overrides latency.")
+        prs.add_argument("--density", type=int, default=200, help="Tape density in Characters Per Inch (e.g. 200, 556, 800)")
 
     # run
     pr = sub.add_parser("run", help="Run program on simulator")
