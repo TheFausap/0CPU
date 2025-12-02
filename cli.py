@@ -99,15 +99,18 @@ def cmd_assemble(args: argparse.Namespace) -> int:
 
 
 def cmd_buildlib(args: argparse.Namespace) -> int:
-    src = Path(args.source)
+    sources = [Path(s) for s in args.source]
     out = Path(args.out)
 
-    text = read_text(src)
-    lb = LibraryBuilder(text)
+    full_text = ""
+    for src in sources:
+        full_text += read_text(src) + "\n"
+
+    lb = LibraryBuilder(full_text)
     lb.parse()
     lb.build(str(out))
 
-    print(f"Built library '{src.name}' → '{out}' with {len(lb.functions)} functions.")
+    print(f"Built library from {len(sources)} sources → '{out}' with {len(lb.functions)} functions.")
     return 0
 
 
@@ -701,7 +704,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # buildlib
     pl = sub.add_parser("buildlib", help="Build library.tape from library assembly")
-    pl.add_argument("source", help="Library assembly source file")
+    pl.add_argument("source", nargs='+', help="Library assembly source file(s)")
     pl.add_argument("-o", "--out", default="library.tape", help="Output library tape path")
 
     # buildcards
