@@ -3,7 +3,7 @@ import os, time, random
 from ..core.encoding import BYTE_PER_WORD, WORD_MASK, to_twos_complement, from_twos_complement, word_to_bytes, bytes_to_word
 
 class TapeDevice:
-    def __init__(self, path: str, sequential_only: bool = True, ms_per_word: int = 10, start_stop_ms: int = 50, error_rate: float = 0.0, max_retries: int = 3):
+    def __init__(self, path: str, sequential_only: bool = True, ms_per_word: int = 2, start_stop_ms: int = 50, error_rate: float = 0.0, max_retries: int = 3):
         self.path = path
         self.sequential_only = sequential_only
         self.ms_per_word = ms_per_word
@@ -22,7 +22,12 @@ class TapeDevice:
         self._last_action_time = time.time()
 
     def _simulate_latency(self, words: int = 1):
-        time.sleep((self.start_stop_ms + self.ms_per_word * words) / 1000.0)
+        # Simulate motor spin-up only if idle for a while
+        now = time.time()
+        latency = self.ms_per_word * words
+        if (now - self._last_action_time) > 0.2: # Motor spins down after 200ms idle
+            latency += self.start_stop_ms
+        time.sleep(latency / 1000.0)
 
     def _inject_error(self) -> bool:
         err = random.random() < self.error_rate
@@ -49,6 +54,8 @@ class TapeDevice:
 
     def seek(self, index: int):
         index = max(0, int(index))
+        if index == self.position:
+            return
         if self.sequential_only:
             if index < self.position:
                 self.rewind()
