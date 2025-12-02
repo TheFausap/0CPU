@@ -223,14 +223,18 @@ class LibraryBuilder:
                 self.current.clobbers = bm
                 continue
 
-            # instruction (inside function), with optional label operand
+            # Instruction
             if head == 'instr':
                 if self.current is None:
                     raise ValueError(f"[line {lineno}] instr outside of a .libfn block")
+                
+                # re-split to preserve operand spacing if needed, but simple split is fine
+                toks = line.split()
+                print(f"DEBUG: instr line='{line}' toks={toks}")
                 if len(toks) < 2:
-                    raise ValueError(f"[line {lineno}] instr requires a mnemonic")
-                mnem = toks[1]
-
+                    raise ValueError(f"[line {lineno}] instr requires mnemonic")
+                
+                mnem = toks[1].upper()
                 # Special handling for CALL
                 if mnem == 'CALL':
                     mode = CALL_MODE_SCRATCH_ABS
@@ -262,8 +266,21 @@ class LibraryBuilder:
                              mode = CALL_MODE_LIB_IDX
                              value = self._parse_int(toks[3])
                         else:
-                            # Fallback to direct operand if needed, or error
-                            pass
+                            # Fallback to direct operand
+                            try:
+                                raw_val = self._parse_int(form)
+                                # Use this as the fully packed operand
+                                operand = raw_val
+                                self._emit_instr(mnem, operand)
+                                # Handle PB if present (though unlikely with raw operand)
+                                if "PB" in toks:
+                                     # ... existing PB logic would append to extra_words ...
+                                     # But we already appended the instruction.
+                                     # Let's just break/continue here.
+                                     pass
+                                continue 
+                            except ValueError:
+                                pass
 
                     if "PB" in toks:
                         flags |= CALL_FLAG_PB
@@ -285,12 +302,15 @@ class LibraryBuilder:
                     op_tok = toks[2].strip()
                     # allow @label or label
                     label_name = None
-                    if not op_tok.lower().startswith("0x"):
-                        # try int; if fails, treat as label
-                        try:
-                            operand = self._parse_int(op_tok)
-                        except ValueError:
-                            label_name = op_tok[1:] if op_tok.startswith("@") else op_tok
+                    
+                    try:
+                        operand = self._parse_int(op_tok)
+                        print(f"DEBUG: parsed int {op_tok} -> {operand}")
+                    except ValueError:
+                        # if int parse fails, treat as label
+                        print(f"DEBUG: parse int failed for {op_tok}")
+                        label_name = op_tok[1:] if op_tok.startswith("@") else op_tok
+
                     if label_name:
                         # encode with operand=0 for now; remember to fix in build()
                         idx = len(self.current.body)

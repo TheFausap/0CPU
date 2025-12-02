@@ -1,0 +1,138 @@
+.libhdr
+
+; ---- Constant Pool ----
+.constbase 1500
+
+ASCII_0:
+data 48
+
+ASCII_MINUS:
+data 45
+
+INT_TEN:
+data 10
+
+MAGIC_10:
+bits 00001999999A ; ceil(2^48 / 10)
+
+; ---- Functions ----
+
+.libfn print_u_dec 20
+.args 1
+.clobbers r1,r2,r3
+; Input: r3 (Positive Integer)
+
+    ; Check zero
+    instr STORE_R3 2253 ; n (save input)
+    instr LOAD_R1 2253
+    instr SKIP_IF_NONZERO
+    instr JUMP PRINT_ZERO
+
+    ; Find divisor
+    instr LOAD_R1 @INT_TEN
+    instr STORE_R1 2250 ; ten
+    instr LOAD_R1 1
+    instr STORE_R1 2251 ; divisor
+
+FIND_DIV_LOOP:
+    ; next_div = divisor * 10
+    instr LOAD_R2 2251 ; divisor
+    instr LOAD_R3 @INT_TEN
+    instr MUL
+    ; r2 has low 48 bits (next_div)
+    instr CLEAR_R1
+    instr ADD ; r1 = r2
+    instr STORE_R1 2252 ; next_div
+    
+    ; Check next_div > n
+    ; n - next_div < 0
+    instr LOAD_R1 2252 ; next_div
+    instr NEG
+    instr STORE_R1 2260 ; -next_div
+    instr LOAD_R2 2260
+    instr LOAD_R1 2253 ; n
+    instr ADD ; n - next_div
+    
+    instr SHIFT_RIGHT 47
+    instr SKIP_IF_ZERO
+    instr JUMP PRINT_LOOP_START
+    
+    ; Update divisor
+    instr LOAD_R1 2252 ; next_div
+    instr STORE_R1 2251 ; divisor
+    instr JUMP FIND_DIV_LOOP
+
+PRINT_LOOP_START:
+PRINT_LOOP:
+    ; digit = n / divisor
+    instr LOAD_R2 2253 ; n
+    instr LOAD_R3 2251 ; divisor
+    instr IDIV
+    instr STORE_R1 2254 ; digit
+    
+    ; Print digit
+    instr LOAD_R2 @ASCII_0
+    instr LOAD_R3 2254 ; digit
+    instr ADD
+    instr STORE_R1 2260 ; char
+    instr LOAD_R3 2260
+    instr WRITE_TAPE
+    
+    ; n = n - digit * divisor
+    instr LOAD_R2 2254 ; digit
+    instr LOAD_R3 2251 ; divisor
+    instr IMUL ; r1 = digit * divisor
+    instr STORE_R1 2260 ; product
+    
+    instr LOAD_R2 2253 ; n
+    instr LOAD_R3 2260 ; product
+    instr SUB ; r1 = n - product
+    instr STORE_R1 2253 ; n
+    
+    ; divisor = divisor / 10
+    instr LOAD_R2 2251 ; divisor
+    instr LOAD_R3 @INT_TEN
+    instr IDIV ; r1 = divisor / 10
+    instr STORE_R1 2251 ; divisor
+    
+    ; if divisor == 0 break
+    instr LOAD_R1 2251
+    instr SKIP_IF_ZERO
+    instr JUMP PRINT_LOOP
+    
+    instr RET
+
+PRINT_ZERO:
+    instr LOAD_R3 @ASCII_0
+    instr WRITE_TAPE
+    instr RET
+.endl
+
+.libfn print_dec 21
+.args 1
+.clobbers r1,r2,r3
+; Input: r3 (Signed Integer)
+
+    ; Check sign
+    instr STORE_R3 2260 ; save input
+    instr LOAD_R1 2260
+    instr SHIFT_RIGHT 47
+    instr SKIP_IF_NONZERO
+    instr JUMP PRINT_DEC_POS
+    
+    ; Negative
+    instr LOAD_R3 @ASCII_MINUS
+    instr WRITE_TAPE
+    
+    ; Negate r3
+    instr LOAD_R1 2260
+    instr NEG
+    instr STORE_R1 2260
+    instr LOAD_R3 2260
+    
+PRINT_DEC_POS:
+    ; Call print_u_dec (ID 20)
+    ; CALL LIBIDX 20 -> 0x200000014
+    instr CALL 0x200000014
+    instr RET
+.endl

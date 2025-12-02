@@ -128,11 +128,13 @@ class CPU:
     def _lib_resolve_name(self, namehash: int) -> int:
         """Resolve a 48-bit namehash to the function start (skip 3-word header)."""
         _, entry_count, toc_start = self._lib_header()
+        print(f"DEBUG: resolve_name {namehash} (0x{namehash:X}), count={entry_count}")
         for i in range(entry_count):
             _, nh, start, _ = self._lib_toc_entry(toc_start, i)
+            print(f"  Entry {i}: hash={nh} (0x{nh:X})")
             if nh == (namehash & WORD_MASK):
                 return start + 3
-        raise KeyError("Library function namehash not found")
+        raise KeyError(f"Library function namehash not found: 0x{namehash:X}")
 
     # -----------------------------------------------------------------------
     # Execution loop on the active device
@@ -505,6 +507,47 @@ class CPU:
 
         elif op == OP["ROTATE_RIGHT"]:
             self._rotate_r1(left=False, count_signed_36bits=from_tc36(opr_bits))
+            self._emit_trace(dev, tape_ip, op_name, op, opr_bits, consumed_extra, pb_used, ctx_switch=ctx_switch)
+            return next_ip(tape_ip)
+
+        elif op == OP["IMUL"]:
+            # Integer multiplication: r1 = r2 * r3 (truncated to 48 bits)
+            val = (self.r2 * self.r3) & WORD_MASK
+            self.r1 = to_twos_complement(from_twos_complement(val)) # Ensure correct sign handling?
+            # Wait, python ints are arbitrary precision.
+            # r2, r3 are signed integers (from properties).
+            # self.r2 * self.r3 gives correct signed result.
+            # We just need to mask it to 48 bits and store.
+            # But self.r1 setter expects signed int? No, cpu.py stores signed ints in r1/r2/r3?
+            # Let's check properties.
+            # self._r1 is stored as int. Properties r1/r2/r3 return signed int.
+            # Setter takes int and clamps/masks?
+            # cpu.py:
+            # @property
+            # def r1(self): return from_twos_complement(self._r1)
+            # @r1.setter
+            # def r1(self, val): self._r1 = to_twos_complement(val)
+            
+            # So if I assign `self.r1 = self.r2 * self.r3`, it will be converted to twos complement.
+            # Correct.
+            self.r1 = self.r2 * self.r3
+            self._emit_trace(dev, tape_ip, op_name, op, opr_bits, consumed_extra, pb_used, ctx_switch=ctx_switch)
+            return next_ip(tape_ip)
+
+        elif op == OP["IDIV"]:
+            # Integer division: r1 = r2 / r3
+            if self.r3 == 0:
+                # Division by zero? Return 0 or max?
+                # Let's return 0 for now or raise error?
+                # Raising error is safer.
+                raise ValueError("Division by zero (IDIV)")
+            self.r1 = int(self.r2 / self.r3) # int() truncates towards zero?
+            self._emit_trace(dev, tape_ip, op_name, op, opr_bits, consumed_extra, pb_used, ctx_switch=ctx_switch)
+            return next_ip(tape_ip)
+
+        elif op == OP["SUB"]:
+            # Integer subtraction: r1 = r2 - r3
+            self.r1 = self.r2 - self.r3
             self._emit_trace(dev, tape_ip, op_name, op, opr_bits, consumed_extra, pb_used, ctx_switch=ctx_switch)
             return next_ip(tape_ip)
 

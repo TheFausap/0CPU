@@ -76,7 +76,10 @@ class TapeFile:
             f.seek(off)
             b = f.read(BYTE_PER_WORD)
         self._mark_action('read_bits', index)
-        return bytes_to_word(b) if len(b) == BYTE_PER_WORD else None
+        val = bytes_to_word(b) if len(b) == BYTE_PER_WORD else None
+        if "scratchpad" in self.path and index >= 200:
+            print(f"DEBUG: TapeFile({self.path}).read_bits({index}) -> 0x{val:X}")
+        return val
 
     def write_bits(self, index: int, bits48: int):
         self._ensure_size(index + 1)

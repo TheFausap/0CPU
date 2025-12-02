@@ -178,11 +178,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"Booting from cards '{args.cards}'...")
         cpu.boot_from_cards()
 
-    if args.start is not None:
-        cpu._execute_block(scratch_dev, args.start)
-    elif not args.boot:
-        print("Error: Must specify --start <addr> or --boot")
-        return 1
+    try:
+        if args.start is not None:
+            cpu._execute_block(scratch_dev, args.start)
+        elif not args.boot:
+            print("Error: Must specify --start <addr> or --boot")
+            return 1
+    finally:
+        pass # TraceSink handles its own file I/O per emit
 
     print(f"REGS r1={cpu.r1:+d} r2={cpu.r2:+d} r3={cpu.r3:+d}")
 
@@ -203,7 +206,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Dump metrics if requested
     if args.trace_metrics:
         import json
-        Path(args.trace_metrics).write_text(json.dumps(cpu.metrics, indent=2), encoding="utf-8")
+        with open(args.trace_metrics, "w") as f:
+            json.dump(cpu.metrics, f, indent=2)
         print(f"Metrics saved to '{args.trace_metrics}'")
 
 
