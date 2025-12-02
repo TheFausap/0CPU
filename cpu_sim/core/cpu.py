@@ -246,6 +246,23 @@ class CPU:
         new_low = combined & WORD_MASK
         self.r1 = from_twos_complement(new_high)
         self.r2 = from_twos_complement(new_low)
+
+    def _rotate_r1(self, left: bool, count_signed_36bits: int):
+        """Circular shift on r1 (48-bit)."""
+        count = int(count_signed_36bits) % 48
+        if count == 0:
+            return
+
+        val = to_twos_complement(self.r1)  # 48-bit unsigned
+
+        if left:
+            # (val << count) | (val >> (48 - count))
+            rotated = ((val << count) | (val >> (48 - count))) & WORD_MASK
+        else:
+            # (val >> count) | (val << (48 - count))
+            rotated = ((val >> count) | (val << (48 - count))) & WORD_MASK
+
+        self.r1 = from_twos_complement(rotated)
         
     # Observability helper
     def _device_tag(self, dev) -> str:
@@ -478,6 +495,16 @@ class CPU:
 
         elif op == OP["SHIFT_RIGHT"]:
             self._shift_pair_96(left=False, count_signed_36bits=from_tc36(opr_bits))
+            self._emit_trace(dev, tape_ip, op_name, op, opr_bits, consumed_extra, pb_used, ctx_switch=ctx_switch)
+            return next_ip(tape_ip)
+
+        elif op == OP["ROTATE_LEFT"]:
+            self._rotate_r1(left=True, count_signed_36bits=from_tc36(opr_bits))
+            self._emit_trace(dev, tape_ip, op_name, op, opr_bits, consumed_extra, pb_used, ctx_switch=ctx_switch)
+            return next_ip(tape_ip)
+
+        elif op == OP["ROTATE_RIGHT"]:
+            self._rotate_r1(left=False, count_signed_36bits=from_tc36(opr_bits))
             self._emit_trace(dev, tape_ip, op_name, op, opr_bits, consumed_extra, pb_used, ctx_switch=ctx_switch)
             return next_ip(tape_ip)
 

@@ -49,6 +49,8 @@ OP.update({
     "SLOAD_R1":     0x020,
     "SLOAD_R2":     0x021,
     "SLOAD_R3":     0x022,
+    "ROTATE_LEFT":  0x023,
+    "ROTATE_RIGHT": 0x024,
 })
 
 
