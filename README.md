@@ -88,10 +88,10 @@ OCPU/
 
 ## Quick start
 
-1) **Build the library** (example trig library):
+1) **Build the library** (math library):
 
 ```bash
-python cli.py buildlib trig.lib -o library.tape
+python cli.py buildlib math.libasm -o library.tape
 ```
 
 2) **Assemble a program**:
@@ -331,6 +331,18 @@ python cli.py monitor --scratch scratchpad.tape --library library.tape --trace-f
 **Implications**:
 - Angles up to $\pm 4.0$ rad can be represented, allowing full support for $\pi$ and $-\pi$.
 - `atan2` and other trig functions now return correct values in radians without saturation.
+
+---
+
+## Math Library (`math.libasm`)
+
+The standard library (`math.libasm`) provides:
+- **Trigonometry**: `sin`, `cos`, `tan`, `atan`, `atan2` (using Horner series and range reduction).
+- **Exponential**: `exp(x)` (using range reduction and Taylor series).
+- **Roots**: `sqrt(x)`, `inv_sqrt(x)` (using Newton-Raphson).
+- **Integration**: `integrate(a, b, k)` (Trapezoidal Rule).
+  - Calculates $\int_a^b f(x) dx$ with $2^k$ steps.
+  - Uses `CALL SCRATCH 10` as a callback to invoke the user-provided integrand function.
 
 ---
 
