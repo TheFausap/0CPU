@@ -69,8 +69,9 @@ class LibraryBuilder:
       - Overlap safety checks warn/error if globals collide with header/TOC or function region.
     """
 
-    def __init__(self, text: str):
+    def __init__(self, text: str, verbose: bool = False):
         self.text = text
+        self.verbose = verbose
         self.functions: List[LibFunction] = []
         self.current: LibFunction | None = None
 
@@ -230,7 +231,8 @@ class LibraryBuilder:
                 
                 # re-split to preserve operand spacing if needed, but simple split is fine
                 toks = line.split()
-                print(f"DEBUG: instr line='{line}' toks={toks}")
+                if self.verbose:
+                    print(f"DEBUG: instr line='{line}' toks={toks}")
                 if len(toks) < 2:
                     raise ValueError(f"[line {lineno}] instr requires mnemonic")
                 
@@ -305,10 +307,12 @@ class LibraryBuilder:
                     
                     try:
                         operand = self._parse_int(op_tok)
-                        print(f"DEBUG: parsed int {op_tok} -> {operand}")
+                        if self.verbose:
+                            print(f"DEBUG: parsed int {op_tok} -> {operand}")
                     except ValueError:
                         # if int parse fails, treat as label
-                        print(f"DEBUG: parse int failed for {op_tok}")
+                        if self.verbose:
+                            print(f"DEBUG: parse int failed for {op_tok}")
                         label_name = op_tok[1:] if op_tok.startswith("@") else op_tok
 
                     if label_name:
@@ -353,7 +357,7 @@ class LibraryBuilder:
           [0] MAGIC, [1] VERSION, [2] ENTRY_COUNT, [3] TOC_START
           TOC entries (4 words each): [ID, NAMEHASH, START, LENGTH]
           Functions:
-            [start+0] FNHDR_MAGIC (0x464E4844)
+            [start+0] FNHDR_MAGIC (0x464E484400)
             [start+1] FN_META => (ABI_VER<<36)|(ARGS<<24)|(RETURNS<<16)|(CLOBBERS)
             [start+2] RESERVED (0)
             [start+3..] BODY (encoded instructions)

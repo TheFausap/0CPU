@@ -44,7 +44,9 @@ class CPU:
         library,
         card_reader: CardReader,
         paper_tape: PaperTape,
+        verbose: bool = False,
     ):
+        self.verbose = verbose
         # Registers (signed Q47 integers)
         self.r1: int = 0
         self.r2: int = 0
@@ -128,10 +130,12 @@ class CPU:
     def _lib_resolve_name(self, namehash: int) -> int:
         """Resolve a 48-bit namehash to the function start (skip 3-word header)."""
         _, entry_count, toc_start = self._lib_header()
-        print(f"DEBUG: resolve_name {namehash} (0x{namehash:X}), count={entry_count}")
+        if self.verbose:
+            print(f"DEBUG: resolve_name {namehash} (0x{namehash:X}), count={entry_count}")
         for i in range(entry_count):
             _, nh, start, _ = self._lib_toc_entry(toc_start, i)
-            print(f"  Entry {i}: hash={nh} (0x{nh:X})")
+            if self.verbose:
+                print(f"  Entry {i}: hash={nh} (0x{nh:X})")
             if nh == (namehash & WORD_MASK):
                 return start + 3
         raise KeyError(f"Library function namehash not found: 0x{namehash:X}")

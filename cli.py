@@ -60,11 +60,11 @@ def write_scratchpad(tape: TapeFile, items: List, listing_path: Optional[Path] =
 # Command handlers
 # -----------------------------------------------------------------------------
 
-def _make_device(path: str, realistic: bool, sequential_only: bool, latency: int, start_stop_ms: int, error_rate: float):
+def _make_device(path: str, realistic: bool, sequential_only: bool, latency: int, start_stop_ms: int, error_rate: float, verbose: bool = False):
     if realistic:
         return TapeDevice(path, sequential_only=sequential_only, ms_per_word=latency, start_stop_ms=start_stop_ms, error_rate=error_rate)
     else:
-        return TapeFile(path)
+        return TapeFile(path, verbose=verbose)
 
 
 def cmd_assemble(args: argparse.Namespace) -> int:
@@ -106,7 +106,7 @@ def cmd_buildlib(args: argparse.Namespace) -> int:
     for src in sources:
         full_text += read_text(src) + "\n"
 
-    lb = LibraryBuilder(full_text)
+    lb = LibraryBuilder(full_text, verbose=args.verbose)
     lb.parse()
     lb.build(str(out))
 
@@ -152,12 +152,12 @@ def dump_paper_to_file(paper_tape: TapeFile, path: Path):
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    scratch_dev = _make_device(args.scratch, args.realistic, args.sequential_only, args.latency, args.start_stop_ms, args.error_rate)
-    library_dev = _make_device(args.library if args.library else "library.tape", args.realistic, args.sequential_only, args.latency, args.start_stop_ms, args.error_rate)
-    cards_tape = TapeFile(str(Path(args.cards))) if args.cards else TapeFile("cards.tape")
-    paper_tape = TapeFile(str(Path(args.paper))) if args.paper else TapeFile("paper.tape")
+    scratch_dev = _make_device(args.scratch, args.realistic, args.sequential_only, args.latency, args.start_stop_ms, args.error_rate, verbose=args.verbose)
+    library_dev = _make_device(args.library if args.library else "library.tape", args.realistic, args.sequential_only, args.latency, args.start_stop_ms, args.error_rate, verbose=args.verbose)
+    cards_tape = TapeFile(str(Path(args.cards)), verbose=args.verbose) if args.cards else TapeFile("cards.tape", verbose=args.verbose)
+    paper_tape = TapeFile(str(Path(args.paper)), verbose=args.verbose) if args.paper else TapeFile("paper.tape", verbose=args.verbose)
 
-    cpu = CPU(scratch_dev, library_dev, CardReader(cards_tape), PaperTape(paper_tape))
+    cpu = CPU(scratch_dev, library_dev, CardReader(cards_tape), PaperTape(paper_tape), verbose=args.verbose)
 
 
     # Trace configuration
@@ -223,12 +223,12 @@ def cmd_run(args: argparse.Namespace) -> int:
 class Monitor:
     """Interactive monitor: step/run, inspect registers/memory, assemble & load."""
 
-    def __init__(self, scratch_path: Path, library_path: Optional[Path], cards_path: Optional[Path], paper_path: Optional[Path], realistic: bool, sequential_only: bool, latency: int, start_stop_ms: int, error_rate: float):
-        self.scratch = _make_device(str(scratch_path), realistic, sequential_only, latency, start_stop_ms, error_rate)
-        self.library = _make_device(str(library_path) if library_path else 'library.tape', realistic, sequential_only, latency, start_stop_ms, error_rate)
-        self.cards = TapeFile(str(cards_path)) if cards_path else TapeFile('cards.tape')
-        self.paper = TapeFile(str(paper_path)) if paper_path else TapeFile('paper.tape')
-        self.cpu = CPU(self.scratch, self.library, CardReader(self.cards), PaperTape(self.paper))
+    def __init__(self, scratch_path: Path, library_path: Optional[Path], cards_path: Optional[Path], paper_path: Optional[Path], realistic: bool, sequential_only: bool, latency: int, start_stop_ms: int, error_rate: float, verbose: bool = False):
+        self.scratch = _make_device(str(scratch_path), realistic, sequential_only, latency, start_stop_ms, error_rate, verbose=verbose)
+        self.library = _make_device(str(library_path) if library_path else 'library.tape', realistic, sequential_only, latency, start_stop_ms, error_rate, verbose=verbose)
+        self.cards = TapeFile(str(cards_path), verbose=verbose) if cards_path else TapeFile('cards.tape', verbose=verbose)
+        self.paper = TapeFile(str(paper_path), verbose=verbose) if paper_path else TapeFile('paper.tape', verbose=verbose)
+        self.cpu = CPU(self.scratch, self.library, CardReader(self.cards), PaperTape(self.paper), verbose=verbose)
         self.dev = self.scratch  # current device
         self.ip: Optional[int] = 0
         self.trace: bool = False
@@ -628,7 +628,7 @@ def cmd_monitor(args: argparse.Namespace) -> int:
                   Path(args.cards) if args.cards else None,
                   Path(args.paper) if args.paper else None,
                   realistic=args.realistic, sequential_only=args.sequential_only,
-                  latency=args.latency, start_stop_ms=args.start_stop_ms, error_rate=args.error_rate)
+                  latency=args.latency, start_stop_ms=args.start_stop_ms, error_rate=args.error_rate, verbose=args.verbose)
     
     
     # Trace configuration for monitor
@@ -706,6 +706,7 @@ def build_parser() -> argparse.ArgumentParser:
     pl = sub.add_parser("buildlib", help="Build library.tape from library assembly")
     pl.add_argument("source", nargs='+', help="Library assembly source file(s)")
     pl.add_argument("-o", "--out", default="library.tape", help="Output library tape path")
+    pl.add_argument("-v", "--verbose", action="store_true", help="Enable verbose debug output")
 
     # buildcards
     pc = sub.add_parser("buildcards", help="Build boot cards from assembly; optionally write scratchpad")
@@ -734,6 +735,7 @@ def build_parser() -> argparse.ArgumentParser:
     pr.add_argument("--dump-paper", help="Dump paper tape to file after run")
     pr.add_argument("--trace-file", help="Write JSONL trace to file")
     pr.add_argument("--trace-metrics", help="Write metrics JSON to file")
+    pr.add_argument("-v", "--verbose", action="store_true", help="Enable verbose debug output")
     add_realism_opts(pr)
 
     # monitor
@@ -745,6 +747,7 @@ def build_parser() -> argparse.ArgumentParser:
     pm.add_argument("--blinklights", action="store_true", help="Show front-panel blinklights UI")
     pm.add_argument("--start", type=int, help="Start IP (bypass cards)")
     pm.add_argument("--boot", action="store_true", help="Boot from cards (ignore --start)")
+    pm.add_argument("-v", "--verbose", action="store_true", help="Enable verbose debug output")
 
     add_realism_opts(pm)
 

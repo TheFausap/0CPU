@@ -11,14 +11,16 @@ from .encoding import (
 )
 
 class TapeFile:
-    def __init__(self, path: str):
+    def __init__(self, path: str, verbose: bool = False):
         self.path = path
+        self.verbose = verbose
         self.last_action = None
         self.last_error = False
         self._last_action_time = 0
         self._pos = 0  # track last touched record index for STATUS/FF/REWIND
         if not os.path.exists(self.path):
-            with open(self.path, "wb"):
+            # Create empty file if not exists
+            with open(self.path, "wb") as f:
                 pass
 
     def _mark_action(self, action, index=None):
@@ -77,7 +79,7 @@ class TapeFile:
             b = f.read(BYTE_PER_WORD)
         self._mark_action('read_bits', index)
         val = bytes_to_word(b) if len(b) == BYTE_PER_WORD else None
-        if "scratchpad" in self.path and index >= 200:
+        if self.verbose and "scratchpad" in self.path and index >= 200:
             print(f"DEBUG: TapeFile({self.path}).read_bits({index}) -> 0x{val:X}")
         return val
 
