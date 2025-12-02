@@ -1095,3 +1095,169 @@ EXP_RET:
 instr LOAD_R1 2002
 instr RET
 .endl
+
+
+; -----------------------------------------------------------------------------
+; integrate(a, b, k): returns integral of f(x) from a to b
+; Inputs: r1=a, r2=b, r3=k (steps = 2^k)
+; Output: r1=result
+; Callback: CALL SCRATCH 10 (user must place JUMP INTEGRAND at 10)
+; -----------------------------------------------------------------------------
+.libfn integrate 0x09
+.args 3
+.returns r1
+.clobbers r1,r2,r3
+
+; Store args
+instr STORE_R1 2100              ; a
+instr STORE_R3 2102              ; k
+instr CLEAR_R1
+instr ADD                       ; r1 = r2 (b)
+instr STORE_R1 2101              ; b
+
+; Calculate h = (b - a) >> k
+; First get -a
+instr LOAD_R1 2100               ; a
+instr NEG
+instr STORE_R1 2107              ; -a
+; b + (-a)
+instr LOAD_R1 2101               ; b
+instr LOAD_R2 2107               ; -a
+instr ADD
+instr STORE_R1 2103              ; b-a (h_temp)
+
+; Shift h right by k
+instr LOAD_R1 2102               ; k
+instr STORE_R1 2106              ; counter = k
+instr LOAD_R1 2103               ; h_temp
+
+INTEGRATE_SHIFT_H_LOOP:
+instr LOAD_R1 2106               ; counter (in r1)
+instr SKIP_IF_ZERO
+instr JUMP INTEGRATE_SHIFT_H_BODY
+instr JUMP INTEGRATE_SHIFT_H_DONE
+
+INTEGRATE_SHIFT_H_BODY:
+instr LOAD_R1 2103               ; load h
+instr SHIFT_RIGHT 1             ; h = h >> 1
+instr STORE_R1 2103              ; save h
+; Decrement counter
+instr LOAD_R1 2106
+instr LOAD_R2 @INT_MONE
+instr ADD
+instr STORE_R1 2106              ; counter--
+instr JUMP INTEGRATE_SHIFT_H_LOOP
+
+INTEGRATE_SHIFT_H_DONE:
+; h is already in 2103
+
+; Calculate steps = 1 << k
+instr LOAD_R1 @INT_ONE
+instr STORE_R1 2108              ; steps
+instr LOAD_R1 2102               ; k
+instr STORE_R1 2106              ; counter = k
+
+INTEGRATE_SHIFT_STEPS_LOOP:
+instr LOAD_R1 2106               ; counter
+instr SKIP_IF_ZERO
+instr JUMP INTEGRATE_SHIFT_STEPS_BODY
+instr JUMP INTEGRATE_SHIFT_STEPS_DONE
+
+INTEGRATE_SHIFT_STEPS_BODY:
+instr LOAD_R1 2108               ; steps
+instr CLEAR_R2                  ; clear r2 to avoid shifting garbage into r1
+instr SHIFT_LEFT 1
+instr STORE_R1 2108              ; steps
+; Decrement counter
+instr LOAD_R1 2106
+instr LOAD_R2 @INT_MONE
+instr ADD
+instr STORE_R1 2106              ; counter--
+instr JUMP INTEGRATE_SHIFT_STEPS_LOOP
+
+INTEGRATE_SHIFT_STEPS_DONE:
+; steps is in 2108.
+
+; Initialize sum = 0.5 * (f(a) + f(b)) * h
+; f(a)
+instr LOAD_R1 2100               ; a
+instr CALL SCRATCH 10            ; f(a) -> r1
+instr STORE_R1 2104              ; sum = f(a)
+
+; f(b)
+instr LOAD_R1 2101               ; b
+instr CALL SCRATCH 10            ; f(b) -> r1
+instr LOAD_R2 2104               ; sum
+instr ADD                       ; f(b) + sum
+instr STORE_R1 2104              ; sum
+
+; sum * 0.5
+instr LOAD_R2 @HALF
+instr LOAD_R3 2104
+instr MUL
+instr ROUND
+instr STORE_R1 2104              ; sum
+
+; sum * h
+instr LOAD_R2 2103               ; h
+instr LOAD_R3 2104               ; sum
+instr MUL
+instr ROUND
+instr STORE_R1 2104              ; sum (scaled)
+
+; Loop setup
+; counter = steps - 1
+instr LOAD_R1 2108               ; steps
+instr LOAD_R2 @INT_MONE
+instr ADD
+instr STORE_R1 2106              ; counter
+
+; x = a + h
+instr LOAD_R1 2100               ; a
+instr LOAD_R2 2103               ; h
+instr ADD
+instr STORE_R1 2105              ; x
+
+INTEGRATE_LOOP:
+instr LOAD_R1 2106               ; counter
+instr SKIP_IF_ZERO
+instr JUMP INTEGRATE_DO
+instr JUMP INTEGRATE_DONE
+
+INTEGRATE_DO:
+; f(x)
+instr LOAD_R1 2105               ; x
+instr CALL SCRATCH 10            ; f(x)
+instr STORE_R1 2107              ; term = f(x)
+
+; term * h
+instr LOAD_R2 2103               ; h
+instr LOAD_R3 2107               ; term
+instr MUL
+instr ROUND
+instr STORE_R1 2107              ; term (scaled)
+
+; sum += term
+instr LOAD_R1 2107               ; term
+instr LOAD_R2 2104               ; sum
+instr ADD
+instr STORE_R1 2104              ; sum
+
+; x += h
+instr LOAD_R1 2105               ; x
+instr LOAD_R2 2103               ; h
+instr ADD
+instr STORE_R1 2105              ; x
+
+; counter--
+instr LOAD_R1 2106
+instr LOAD_R2 @INT_MONE
+instr ADD
+instr STORE_R1 2106
+instr JUMP INTEGRATE_LOOP
+
+INTEGRATE_DONE:
+; result is sum
+instr LOAD_R1 2104
+instr RET
+.endl

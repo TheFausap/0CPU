@@ -11,7 +11,15 @@ from ..core.encoding import (
     fnv1a_hash_48,
     word_to_bytes,
 )
-from ..core.opcodes import encode_instr
+from ..core.opcodes import (
+    encode_instr,
+    pack_call_operand,
+    CALL_MODE_SCRATCH_ABS,
+    CALL_MODE_LIB_ABS,
+    CALL_MODE_LIB_IDX,
+    CALL_MODE_LIB_NAME,
+    CALL_FLAG_PB
+)
 
 LIB_MAGIC   = 0x4C4942484400  # 'LIBHD' truncated to 48-bit
 VERSION     = 0x000000000001
@@ -222,6 +230,56 @@ class LibraryBuilder:
                 if len(toks) < 2:
                     raise ValueError(f"[line {lineno}] instr requires a mnemonic")
                 mnem = toks[1]
+
+                # Special handling for CALL
+                if mnem == 'CALL':
+                    mode = CALL_MODE_SCRATCH_ABS
+                    flags = 0
+                    value = 0
+                    extra_words = []
+
+                    if len(toks) >= 3:
+                        form = toks[2]
+                        if form == 'SCRATCH':
+                            if len(toks) < 4:
+                                raise ValueError(f"[line {lineno}] CALL SCRATCH requires address")
+                            value = self._parse_int(toks[3])
+                            mode = CALL_MODE_SCRATCH_ABS
+                        elif form == 'LIBNAME':
+                            if len(toks) < 4:
+                                raise ValueError(f"[line {lineno}] CALL LIBNAME requires name")
+                            mode = CALL_MODE_LIB_NAME
+                            nhash = fnv1a_hash_48(toks[3])
+                            extra_words.append(nhash & WORD_MASK)
+                        elif form == 'LIBADDR':
+                             if len(toks) < 4:
+                                 raise ValueError(f"[line {lineno}] CALL LIBADDR requires address")
+                             mode = CALL_MODE_LIB_ABS
+                             value = self._parse_int(toks[3])
+                        elif form == 'LIBIDX':
+                             if len(toks) < 4:
+                                 raise ValueError(f"[line {lineno}] CALL LIBIDX requires index")
+                             mode = CALL_MODE_LIB_IDX
+                             value = self._parse_int(toks[3])
+                        else:
+                            # Fallback to direct operand if needed, or error
+                            pass
+
+                    if "PB" in toks:
+                        flags |= CALL_FLAG_PB
+                        idxpb = toks.index("PB")
+                        if idxpb + 1 >= len(toks):
+                            raise ValueError(f"[line {lineno}] PB requires address")
+                        pb_addr_tok = toks[idxpb+1]
+                        pb_val = self._parse_int(pb_addr_tok[1:]) if pb_addr_tok.startswith("@") else self._parse_int(pb_addr_tok)
+                        extra_words.append(pb_val & WORD_MASK)
+
+                    operand = pack_call_operand(mode, flags, value)
+                    self._emit_instr("CALL", operand)
+                    for ew in extra_words:
+                        self.current.body.append(ew)
+                    continue
+
                 operand = 0
                 if len(toks) >= 3:
                     op_tok = toks[2].strip()

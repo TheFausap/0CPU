@@ -669,7 +669,6 @@ def cmd_monitor(args: argparse.Namespace) -> int:
         # OR make `boot_from_cards` capable of yielding/being stepped.
         
         # For now, let's just add the call. If it runs the whole program, so be it. 
-        # The user asked to "boot from card".
         pass
 
     if getattr(args, "blinklights", False):
