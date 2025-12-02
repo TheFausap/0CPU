@@ -231,11 +231,13 @@ class Monitor:
         self.cpu = CPU(self.scratch, self.library, CardReader(self.cards), PaperTape(self.paper), verbose=verbose)
         self.dev = self.scratch  # current device
         self.ip: Optional[int] = 0
+        self.booting: bool = False
         self.trace: bool = False
 
     def prompt(self):
         name = 'scratch' if self.dev is self.scratch else ('library' if self.dev is self.library else 'unknown')
-        return f"cpu@{name}:0x{(self.ip if self.ip is not None else 0):06X}> "
+        ip_str = f"0x{self.ip:06X}" if self.ip is not None else "HALTED"
+        return f"cpu@{name}:{ip_str}> "
 
     def print_regs(self):
         print(f"r1={self.cpu.r1:+d} r2={self.cpu.r2:+d} r3={self.cpu.r3:+d}")
@@ -530,25 +532,44 @@ def _blinklights_loop(mon: Monitor, ip):
             elif ch == ord(' '):
                 paused = not paused
 
-            # advance CPU one step if not paused and IP valid
-            if not paused and mon.ip is not None:
-                bits = mon.dev.read_bits(mon.ip)
-                
-                if bits is None:
-                    mon.ip = None
-                else:
-                    op_code, opr = decode_op(bits)
-                    op_name = OP_REV.get(op_code, f"OP_{op_code:03X}")
-                    next_ip = mon.cpu.execute_encoded(mon.dev, bits48=bits, tape_ip=mon.ip)
-                    mon.dev = mon.cpu._current_dev if getattr(mon.cpu, "_current_dev", None) else mon.dev
-                    mon.ip = next_ip
+            # advance CPU one step if not paused and IP valid (or booting)
+            if not paused:
+                if mon.booting:
+                    done, start_ip = mon.cpu.boot_tick()
+                    if done:
+                        mon.booting = False
+                        if start_ip is not None:
+                            mon.ip = start_ip
+                            mon.dev = mon.scratch
+                        else:
+                            mon.ip = None # EOF without TXR
+                    
                     # perf
                     steps_count += 1
                     now = time.time()
                     rate_window.append(now - last_t)
                     last_t = now
-                    last_op = op_name
-                    last_opr = opr
+                    last_op = "BOOT"
+                    last_opr = 0
+
+                elif mon.ip is not None:
+                    bits = mon.dev.read_bits(mon.ip)
+                    
+                    if bits is None:
+                        mon.ip = None
+                    else:
+                        op_code, opr = decode_op(bits)
+                        op_name = OP_REV.get(op_code, f"OP_{op_code:03X}")
+                        next_ip = mon.cpu.execute_encoded(mon.dev, bits48=bits, tape_ip=mon.ip)
+                        mon.dev = mon.cpu._current_dev if getattr(mon.cpu, "_current_dev", None) else mon.dev
+                        mon.ip = next_ip
+                        # perf
+                        steps_count += 1
+                        now = time.time()
+                        rate_window.append(now - last_t)
+                        last_t = now
+                        last_op = op_name
+                        last_opr = opr
 
             # compute throughput
             avg_dt = (sum(rate_window) / len(rate_window)) if rate_window else 0.0
@@ -568,7 +589,7 @@ def _blinklights_loop(mon: Monitor, ip):
             # Opcode activity
             stdscr.addstr(8, 0, "Opcode:")
             blink = "▮" if (time.time() % 0.3) < 0.15 else " "  # a tiny blink indicator
-            stdscr.addstr(9, 2, f"{blink} {last_op:<14}  opr=0x{opr:09X}")
+            stdscr.addstr(9, 2, f"{blink} {last_op:<14}  opr=0x{last_opr:09X}")
 
             # Device status (realism aware)
             stdscr.addstr(11, 0, "Devices:")
@@ -647,9 +668,12 @@ def cmd_monitor(args: argparse.Namespace) -> int:
             print("Error: --boot requires --cards")
             return 1
         print(f"Booting from cards '{args.cards}'...")
-        mon.cpu.boot_from_cards()
-        # Boot runs the program to completion (via TXR -> _execute_block), so IP is now None (halted).
-        mon.ip = None
+        if args.blinklights:
+            mon.booting = True
+        else:
+            mon.cpu.boot_from_cards()
+            # In non-interactive mode, boot runs to completion (via TXR blocking).
+            mon.ip = None
         # After boot, IP should be set by the last TXR instruction
         # We need to ensure mon.ip reflects the CPU's current state if it changed?
         # boot_from_cards executes instructions. If TXR was executed, cpu._execute_block was called?

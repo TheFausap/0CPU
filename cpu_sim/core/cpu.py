@@ -573,9 +573,9 @@ class CPU:
             start = from_tc36(opr_bits)
             if start < 0:
                 raise ValueError("Negative address for TXR")
-            self._execute_block(self.scratchpad, start)
+            # TXR is a jump to scratchpad; caller handles execution loop
             self._emit_trace(dev, tape_ip, op_name, op, opr_bits, consumed_extra, pb_used, ctx_switch=ctx_switch)
-            return next_ip(tape_ip)
+            return start
 
         elif op == OP["SLOAD_R1"]:
             # Always load from scratchpad, even when executing on library tape
@@ -734,17 +734,48 @@ class CPU:
     # -----------------------------------------------------------------------
     # Boot from cards (odd -> r1, even -> execute on scratchpad)
     # -----------------------------------------------------------------------
+    # -----------------------------------------------------------------------
+    # Boot from cards (odd -> r1, even -> execute on scratchpad)
+    # -----------------------------------------------------------------------
+    def boot_tick(self) -> Tuple[bool, Optional[int]]:
+        """
+        Perform one step of the boot process.
+        Returns (done, start_ip).
+        - done=True, start_ip=None: EOF (no more cards)
+        - done=True, start_ip=int:  TXR encountered, transfer to this IP
+        - done=False:               Continue booting
+        """
+        if not hasattr(self, '_boot_idx'):
+            self._boot_idx = 1
+
+        val = self.card_reader.read_next()
+        if val is None:
+            return True, None # EOF
+
+        start_ip = None
+        if self._boot_idx % 2 == 1:
+            # odd card: load r1 directly (signed int from tape)
+            self.r1 = val
+        else:
+            # even card: execute encoded instruction (use raw bits)
+            bits = to_twos_complement(val)
+            # execute_encoded returns next_ip (None if HALT, or target if JUMP/TXR)
+            # For TXR, it now returns the target address.
+            start_ip = self.execute_encoded(self.scratchpad, bits, tape_ip=None)
+
+        self._boot_idx += 1
+        
+        if start_ip is not None:
+            return True, start_ip
+            
+        return False, None
+
     def boot_from_cards(self):
-        idx = 1
+        self._boot_idx = 1
         while True:
-            val = self.card_reader.read_next()
-            if val is None:
+            done, start_ip = self.boot_tick()
+            if done:
+                if start_ip is not None:
+                    # TXR encountered: execute block on scratchpad (blocking)
+                    self._execute_block(self.scratchpad, start_ip)
                 break
-            if idx % 2 == 1:
-                # odd card: load r1 directly (signed int from tape)
-                self.r1 = val
-            else:
-                # even card: execute encoded instruction (use raw bits)
-                bits = to_twos_complement(val)
-                self.execute_encoded(self.scratchpad, bits, tape_ip=None)
-            idx += 1
