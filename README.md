@@ -92,6 +92,9 @@ OCPU/
 
 ```bash
 python cli.py buildlib math.libasm -o library.tape
+# Or with multiple source files:
+# python cli.py buildlib math_part1.asm math_part2.asm -o library.tape
+
 ```
 
 2) **Assemble a program**:
@@ -110,6 +113,7 @@ python cli.py run --scratch scratchpad.tape --library library.tape --start 310 -
 
 ```bash
 python cli.py monitor --scratch scratchpad.tape --library library.tape --blinklights
+
 # commands inside monitor:
 #   start <addr>   step [n]   run [max_steps]
 #   regs           lights     device scratch|library
@@ -220,6 +224,12 @@ python cli.py run --scratch scratchpad.tape --library library.tape --start 310 \
   --realistic --sequential-only --latency 12 --start-stop-ms 50 --error-rate 0.01 --status
 ```
 
+**New options**:
+- `--ips <float>`: Tape speed in Inches Per Second (e.g., 7.5, 15, 30, 72). Overrides latency.
+- `--density <int>`: Tape density in Characters Per Inch (e.g., 200, 556, 800).
+
+```
+
 Realism opcodes in programs:
 - `REWIND` (operand: device code 0=scratchpad, 1=library, 2=cards)
 - `FF` (operand packs device in top 12 bits, count in low 24)
@@ -286,12 +296,16 @@ python cli.py monitor --scratch scratchpad.tape --library library.tape --trace-f
 
 **ALU**
 - `ADD` (r1 := clamp(r1 + r2))
+- `SUB` (r1 := clamp(r1 - r2))
 - `NEG` (r1 := clamp(-r1))
 - `MUL` (r2 * r3 → r1:r2 as Q94 across the pair)
+- `IMUL` (r1 := r2 * r3; integer multiplication, truncated to 48 bits)
 - `DIV` (r1 / r2 → r1; numerator scaled by Q47; divide‑by‑zero saturates to ±MAX)
+- `IDIV` (r1 := r2 / r3; integer division)
 - `ROUND` (Q94 in r1:r2 → Q47 in r1; nearest, away from zero)
 - `AND`, `OR`, `XOR` (bitwise on 48‑bit two’s‑complement bit patterns)
 - `SHIFT_LEFT`, `SHIFT_RIGHT` (logical shifts across r1:r2 as 96‑bit)
+
 
 **Control & flow**
 - `SKIP`, `SKIP_IF_ZERO`, `SKIP_IF_NONZERO`
